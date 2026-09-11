@@ -34,6 +34,7 @@ const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const https = require('https');
+const querystring = require('querystring');
 const { execFile } = require('child_process');
 
 // Path to bot_commands.json and bridge (supports local, public_html, or same folder)
@@ -257,6 +258,115 @@ async function handleCustomerInteractiveSession(phone, text, name) {
                 return `❌ *Order Not Found*\n━━━━━━━━━━━━━━━━━━━━━\nNo order record matched: \`${raw}\`.\n\nPlease check your Order ID or phone number and try again.\n(Reply *menu* to return to the main menu)`;
             }
         }
+
+        // ── WAEC RESULT CHECKER INTERACTIVE STEPS ──
+
+        // WAEC Step 1: Exam Type
+        if (session.step === 'waec_exam_type') {
+            let examType = 'W.A.S.S.C.E. (School)';
+            let typeCode = '01';
+
+            if (lower === '1' || lower.includes('wassce school')) {
+                examType = 'W.A.S.S.C.E. (School)';
+                typeCode = '01';
+            } else if (lower === '2' || lower.includes('bece school') || lower === 'bece') {
+                examType = 'B.E.C.E.';
+                typeCode = '07';
+            } else if (lower === '3' || lower.includes('novdec') || lower.includes('private wassce')) {
+                examType = 'W.A.S.S.C.E. (Private)';
+                typeCode = '08';
+            } else if (lower === '4' || lower.includes('private bece')) {
+                examType = 'B.E.C.E. (Private)';
+                typeCode = '09';
+            } else {
+                return `⚠️ *Invalid Selection*\n\nPlease reply with a number from *1 to 4*:\n1️⃣ *WASSCE* (School)\n2️⃣ *BECE* (School)\n3️⃣ *WASSCE* (Private / NovDec)\n4️⃣ *BECE* (Private)\n\n_(Reply *cancel* to abort)_`;
+            }
+
+            session.data.exam_type = examType;
+            session.data.type_code = typeCode;
+            session.step = 'waec_index';
+            session.timestamp = now;
+
+            return `Selected: *${examType}* ✅\n\n📝 *Step 2 of 4: Candidate Index Number*\nPlease enter your *10-Digit WAEC Candidate Index Number*:\n_(e.g. \`0010101001\`)_\n\n_(Reply *cancel* to abort)_`;
+        }
+
+        // WAEC Step 2: Index Number
+        if (session.step === 'waec_index') {
+            const cleanIndex = raw.replace(/\D/g, '');
+            if (cleanIndex.length !== 10) {
+                return `⚠️ *Invalid Index Number!*\n\nWAEC Index Numbers must be exactly *10 digits* (e.g. \`0010101001\`).\nYou entered: \`${raw}\` (${cleanIndex.length} digits).\n\nPlease enter a valid 10-digit Index Number:\n_(Or reply *cancel* to abort)_`;
+            }
+
+            session.data.index_number = cleanIndex;
+            session.step = 'waec_year';
+            session.timestamp = now;
+
+            return `Index Number: \`${cleanIndex}\` ✅\n\n📅 *Step 3 of 4: Examination Year*\nPlease enter your *4-Digit Exam Year*:\n_(e.g. \`2024\`, \`2023\`, \`2022\`)_\n\n_(Reply *cancel* to abort)_`;
+        }
+
+        // WAEC Step 3: Exam Year
+        if (session.step === 'waec_year') {
+            const cleanYear = raw.replace(/\D/g, '');
+            const currentYear = new Date().getFullYear();
+            const yearNum = parseInt(cleanYear, 10);
+            if (cleanYear.length !== 4 || isNaN(yearNum) || yearNum < 1995 || yearNum > (currentYear + 1)) {
+                return `⚠️ *Invalid Examination Year!*\n\nPlease enter a valid 4-digit exam year (e.g. \`2024\` or \`2023\`):\n_(Or reply *cancel* to abort)_`;
+            }
+
+            session.data.year = cleanYear;
+            session.step = 'waec_pin_serial';
+            session.timestamp = now;
+
+            return `Exam Year: *${cleanYear}* ✅\n\n🔐 *Step 4 of 4: Card Serial Number & PIN*\n━━━━━━━━━━━━━━━━━━━━━\nPlease paste your card details in any format:\n• \`WSC12345678 123456789012\`\n• \`Serial: WSC12345678, PIN: 123456789012\`\n\n🤖 *Our bot will connect directly to WAEC servers and display your full result slip!* \n\n💳 *Need a card?* Buy at: https://apexprime.club/digital_store\n_(Reply *cancel* to abort)_`;
+        }
+
+        // WAEC Step 4: Card Serial & PIN
+        if (session.step === 'waec_pin_serial') {
+            let serial = session.data.serial || '';
+            let pin = session.data.pin || '';
+
+            // Extract Serial
+            const serialMatch = raw.match(/\b((?:WSC|BCE)[a-zA-Z0-9_\-]{5,20})\b/i) || raw.match(/\b([A-Za-z]{2,5}[0-9]{5,15})\b/i);
+            if (serialMatch && !serial) serial = serialMatch[1].toUpperCase();
+
+            // Extract PIN (10 to 14 digits)
+            const pinMatch = raw.match(/\b(\d{10,14})\b/);
+            if (pinMatch && !pin) pin = pinMatch[1];
+
+            if (!serial && !pin) {
+                const alphanumeric = raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
+                if (alphanumeric.length >= 6 && /[A-Z]/.test(alphanumeric) && /\d/.test(alphanumeric)) {
+                    serial = alphanumeric;
+                }
+            }
+
+            if (!serial || !pin) {
+                if (serial && !pin) {
+                    session.data.serial = serial;
+                    session.timestamp = now;
+                    return `Card Serial: \`${serial}\` ✅\n\nPlease now enter your *Card PIN* (10 to 12 digits):\n_(Reply *cancel* to abort)_`;
+                } else if (pin && !serial) {
+                    session.data.pin = pin;
+                    session.timestamp = now;
+                    return `Card PIN: \`${pin}\` ✅\n\nPlease now enter your *Card Serial Number* (e.g. \`WSC12345678\`):\n_(Reply *cancel* to abort)_`;
+                }
+                return `⚠️ *Card Serial & PIN Required*\n\nPlease paste both your Card Serial Number and PIN:\n• Example: \`WSC12345678 123456789012\`\n\n_(Reply *cancel* to abort)_`;
+            }
+
+            customerSessions.delete(phone);
+
+            // Execute live online WAEC check
+            const resultMsg = await checkWaecOnline(
+                session.data.exam_type || 'W.A.S.S.C.E. (School)',
+                session.data.type_code || '01',
+                session.data.index_number,
+                session.data.year,
+                serial,
+                pin
+            );
+
+            return resultMsg;
+        }
     }
 
     // ── INITIAL INTENT TRIGGERS (When no active session) ──
@@ -267,9 +377,18 @@ async function handleCustomerInteractiveSession(phone, text, name) {
         return `🛒 *Apex Prime Tech — Place Order* 🛒\n━━━━━━━━━━━━━━━━━━━━━\nPlease enter your *User Code* (e.g. \`317\` or \`APEX-317\`):\n\n💡 *Don't have an account or User Code?*\nOrder directly via our instant link:\n👉 https://payroute.name/mr-nipah\n\n_(Reply *cancel* anytime to abort)_`;
     }
 
-    // 2. Trigger "2" / "check result" / "waec" / "wassce" / "bece"
-    if (lower === '2' || lower === '2.' || ['check result', 'result', 'results', 'waec', 'wassce', 'bece', 'checker'].includes(lower)) {
-        return `🎓 *WAEC Result Checker — Apex Prime Tech*\n━━━━━━━━━━━━━━━━━━━━━\nCheck your BECE or WASSCE results online:\n\n🌐 *Official Checking Portal*:\nhttps://ghana.waecdirect.org/\n\n📝 *Quick Steps*:\n1. Go to https://ghana.waecdirect.org/\n2. Enter your 10-digit Index Number\n3. Select Exam Type (WASSCE / BECE) & Exam Year\n4. Enter your Card Serial Number & 12-digit PIN\n5. Click Submit to view your result slip!\n\n💳 *Need a Result Checker Card?*\nBuy instantly with instant delivery at:\n👉 https://apexprime.club/digital_store`;
+    // Direct 1-line WAEC check command (e.g. "check wassce 0010101001 2024 WSC12345678 123456789012")
+    const directWaec = raw.match(/^(?:check\s+|waec\s+)?(wassce|bece)\s+(\d{10})\s+(\d{4})\s+([A-Za-z0-9_\-]+)\s+(\d{10,14})/i);
+    if (directWaec) {
+        const examName = directWaec[1].toUpperCase().includes('BECE') ? 'B.E.C.E.' : 'W.A.S.S.C.E. (School)';
+        const code = directWaec[1].toUpperCase().includes('BECE') ? '07' : '01';
+        return await checkWaecOnline(examName, code, directWaec[2], directWaec[3], directWaec[4].toUpperCase(), directWaec[5]);
+    }
+
+    // 2. Trigger "2" / "check result" / "waec" / "wassce" / "bece" (Starts Interactive Online Check)
+    if (lower === '2' || lower === '2.' || ['check result', 'result', 'results', 'waec', 'wassce', 'bece', 'checker', 'result checker'].includes(lower)) {
+        customerSessions.set(phone, { step: 'waec_exam_type', data: {}, timestamp: now });
+        return `🎓 *Check Result — WAEC Online Portal* 🎓\n━━━━━━━━━━━━━━━━━━━━━\nPlease select your examination by replying with a number (*1 - 4*):\n\n1️⃣ *WASSCE* (School)\n2️⃣ *BECE* (School)\n3️⃣ *WASSCE* (Private / NovDec)\n4️⃣ *BECE* (Private)\n\n💳 *Need a Result Checker Card?*\nBuy cards instantly with automated delivery at:\n👉 https://apexprime.club/digital_store\n\n_(Reply with *1 - 4*, or reply *cancel* to exit)_`;
     }
 
     // 3. Trigger "3" / "check status" / "track" / "status"
@@ -819,7 +938,7 @@ async function handleOwnerCommands(sock, msg, from, text, senderPhone, pushName,
 
     // 10. .commands / .help / .menu
     else if (cmd === '.commands' || cmd === 'commands' || cmd === '.help' || cmd === '.menu') {
-        replyText = `👑 *APEX PRIME — PERSONAL BOT COMMANDS* 👑\n━━━━━━━━━━━━━━━━━━━━━\nControl your personal assistant features directly from your WhatsApp!\n\n⚙️ *LIVE SETTINGS:*\n• 👁️ Auto-View Status: ${ub.autoview ? '🟢 *ON*' : '🔴 *OFF*'}\n• ❤️ Auto-Like Status: ${ub.autolike ? `🟢 *ON* (${ub.autolike_emoji || '❤️'})` : '🔴 *OFF*'}\n• 🗑️ Anti-Delete: ${ub.recoverydeleted ? '🟢 *ON*' : '🔴 *OFF*'}\n• 📸 Save View-Once: ${ub.savedviews ? '🟢 *ON*' : '🔴 *OFF*'}\n• 📇 Auto-Save Contacts: ${ub.autosavecontact ? '🟢 *ON*' : '🔴 *OFF*'}\n\n━━━━━━━━━━━━━━━━━━━━━\n🛠️ *AUTO-FEATURES & EMOJI:*\n• *autoview on* | *autoview off*\n• *autolike on* | *autolike off*\n• *.statusemoji <emoji>* — Set reaction emoji (e.g. *.statusemoji 🔥*)\n• *recoverydeleted on* | *recoverydeleted off*\n• *savedviews on* | *savedviews off*\n• *auto save contact on* | *auto save contact off*\n\n━━━━━━━━━━━━━━━━━━━━━\n👥 *GROUP COMMANDS:*\n• *.tagall [message]* — Mention every member in a group.\n• *.hidetag <message>* — Notify all group members silently.\n\n━━━━━━━━━━━━━━━━━━━━━\n🔓 *MEDIA & FUN TOOLS:*\n• *.vv* — Reply to any View-Once photo/video to unlock it.\n• *.readmore <Header> | <Secret>* — Create WhatsApp Read-More prank.\n\n━━━━━━━━━━━━━━━━━━━━━\n⚡ *UTILITY COMMANDS:*\n• *.status* — Check bot uptime, memory & socket health.\n• *.getcontacts* — Send downloadable VCF file of saved contacts.\n• *.clearcache* — Flush deleted message history cache.\n• *.ping* — Check bot response latency.\n━━━━━━━━━━━━━━━━━━━━━`;
+        replyText = `*APEX PRIME — PERSONAL BOT COMMANDS*\n━━━━━━━━━━━━━━━━━━━━━\nControl your personal assistant features directly from your WhatsApp!\n\n*LIVE SETTINGS:*\n• Auto-View Status: ${ub.autoview ? '*ON*' : '*OFF*'}\n• Auto-Like Status: ${ub.autolike ? `*ON* (${ub.autolike_emoji || '❤️'})` : '*OFF*'}\n• Anti-Delete: ${ub.recoverydeleted ? '*ON*' : '*OFF*'}\n• Save View-Once: ${ub.savedviews ? '*ON*' : '*OFF*'}\n• Auto-Save Contacts: ${ub.autosavecontact ? '*ON*' : '*OFF*'}\n\n━━━━━━━━━━━━━━━━━━━━━\n*AUTO-FEATURES:*\n• *autoview on* | *autoview off*\n• *autolike on* | *autolike off*\n• *.statusemoji <emoji>* — Set reaction emoji (e.g. *.statusemoji 🔥*)\n• *recoverydeleted on* | *recoverydeleted off*\n• *savedviews on* | *savedviews off*\n• *auto save contact on* | *auto save contact off*\n\n━━━━━━━━━━━━━━━━━━━━━\n*GROUP COMMANDS:*\n• *.tagall [message]* — Mention every member in a group.\n• *.hidetag <message>* — Notify all group members silently.\n\n━━━━━━━━━━━━━━━━━━━━━\n*MEDIA & FUN TOOLS:*\n• *.vv* — Reply to any View-Once photo/video to unlock it.\n• *.readmore <Header> | <Secret>* — Create WhatsApp Read-More prank.\n\n━━━━━━━━━━━━━━━━━━━━━\n*UTILITY COMMANDS:*\n• *.status* — Check bot uptime, memory & socket health.\n• *.getcontacts* — Send downloadable VCF file of saved contacts.\n• *.clearcache* — Flush deleted message history cache.\n• *.ping* — Check bot response latency.\n━━━━━━━━━━━━━━━━━━━━━`;
     }
 
     // 11. .status
