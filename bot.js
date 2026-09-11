@@ -92,7 +92,12 @@ const PAIRING_STATE_FILE = path.resolve(__dirname, 'pairing_state.json');
  */
 function fetchJson(url, options = {}) {
     return new Promise((resolve, reject) => {
-        const parsed = new URL(url);
+        let parsed;
+        try {
+            parsed = new URL(url);
+        } catch (e) {
+            return reject(new Error(`Invalid URL: ${url}`));
+        }
         const protocol = parsed.protocol === 'http:' ? http : https;
         const reqOptions = {
             method: options.method || 'GET',
@@ -101,12 +106,13 @@ function fetchJson(url, options = {}) {
                 'Accept': 'application/json, text/plain, */*',
                 ...(options.headers || {})
             },
-            timeout: options.timeout || 15000
+            timeout: options.timeout || 20000
         };
 
         const req = protocol.request(url, reqOptions, (res) => {
             if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-                return fetchJson(res.headers.location, options).then(resolve).catch(reject);
+                const nextUrl = new URL(res.headers.location, url).toString();
+                return fetchJson(nextUrl, options).then(resolve).catch(reject);
             }
             let data = '';
             res.on('data', chunk => data += chunk);
@@ -137,7 +143,12 @@ function fetchJson(url, options = {}) {
  */
 function fetchBuffer(url, options = {}) {
     return new Promise((resolve, reject) => {
-        const parsed = new URL(url);
+        let parsed;
+        try {
+            parsed = new URL(url);
+        } catch (e) {
+            return reject(new Error(`Invalid URL: ${url}`));
+        }
         const protocol = parsed.protocol === 'http:' ? http : https;
         const reqOptions = {
             method: options.method || 'GET',
@@ -145,12 +156,13 @@ function fetchBuffer(url, options = {}) {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 ...(options.headers || {})
             },
-            timeout: options.timeout || 25000
+            timeout: options.timeout || 45000
         };
 
         const req = protocol.request(url, reqOptions, (res) => {
             if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-                return fetchBuffer(res.headers.location, options).then(resolve).catch(reject);
+                const nextUrl = new URL(res.headers.location, url).toString();
+                return fetchBuffer(nextUrl, options).then(resolve).catch(reject);
             }
             const chunks = [];
             res.on('data', chunk => chunks.push(chunk));
@@ -168,6 +180,36 @@ function fetchBuffer(url, options = {}) {
         }
         req.end();
     });
+}
+
+/**
+ * Follow redirects to get final expanded URL (e.g. vt.tiktok.com shortlinks)
+ */
+async function resolveRedirectUrl(url) {
+    let cur = url;
+    for (let i = 0; i < 5; i++) {
+        try {
+            const loc = await new Promise((resolve) => {
+                const parsed = new URL(cur);
+                const protocol = parsed.protocol === 'http:' ? http : https;
+                const req = protocol.request(cur, {
+                    method: 'GET',
+                    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+                    timeout: 6000
+                }, (res) => {
+                    resolve(res.headers.location || null);
+                });
+                req.on('error', () => resolve(null));
+                req.on('timeout', () => { req.destroy(); resolve(null); });
+                req.end();
+            });
+            if (!loc) break;
+            cur = new URL(loc, cur).toString();
+        } catch (e) {
+            break;
+        }
+    }
+    return cur;
 }
 
 /**
@@ -1312,26 +1354,46 @@ async function handleOwnerCommands(sock, msg, from, text, senderPhone, pushName,
     // 17. .tiktok <url> (TikTok Downloader)
     else if (cmd.startsWith('.tiktok ') || cmd.startsWith('tiktok ') || cmd.startsWith('.tt ') || cmd.startsWith('tt ')) {
         const urlMatch = raw.match(/https?:\/\/[^\s]+/i);
-        const url = urlMatch ? urlMatch[0] : null;
+        let url = urlMatch ? urlMatch[0] : null;
         if (!url) {
-            replyText = `📥 *TikTok Downloader*\nPlease provide a valid TikTok link!\nExample: *.tiktok https://vm.tiktok.com/...*`;
+            replyText = `📥 *TikTok Downloader*\nPlease provide a valid TikTok link!\nExample: *.tiktok https://vt.tiktok.com/...*`;
         } else {
             try {
                 await sock.sendMessage(from, { text: `⏳ *Alexa Covert downloading TikTok video...*` }, { quoted: msg });
-                const tikRes = await fetchJson(`https://www.tikwm.com/api/?url=${encodeURIComponent(url)}`);
+                
+                // Expand shortened URLs like vt.tiktok.com or vm.tiktok.com
+                if (url.includes('vt.tiktok.com') || url.includes('vm.tiktok.com')) {
+                    try {
+                        const expanded = await resolveRedirectUrl(url);
+                        if (expanded) url = expanded;
+                    } catch (e) {}
+                }
+
+                // Query TikWM API
+                let tikRes = await fetchJson(`https://www.tikwm.com/api/?url=${encodeURIComponent(url)}`);
+                if ((!tikRes || tikRes.code !== 0) && url.includes('tiktok.com')) {
+                    // Try with non-www tikwm
+                    try {
+                        tikRes = await fetchJson(`https://tikwm.com/api/?url=${encodeURIComponent(url)}`);
+                    } catch (e) {}
+                }
+
                 if (tikRes && tikRes.code === 0 && tikRes.data) {
                     const data = tikRes.data;
                     const videoUrl = data.play || data.wmplay || data.hdplay;
                     const caption = `🎬 *TikTok Video Downloaded*\n━━━━━━━━━━━━━━━━━━━━━\n📝 *Title:* ${data.title || 'TikTok Video'}\n👤 *Author:* ${data.author?.nickname || 'Unknown'} (@${data.author?.unique_id || ''})\n❤️ *Likes:* ${data.digg_count || 0} | 💬 *Comments:* ${data.comment_count || 0}\n━━━━━━━━━━━━━━━━━━━━━\n⚡ *Alexa Covert Downloader*`;
 
                     if (videoUrl) {
-                        const videoBuf = await fetchBuffer(videoUrl);
-                        await sock.sendMessage(from, { video: videoBuf, caption }, { quoted: msg });
-                        return true;
+                        const videoBuf = await fetchBuffer(videoUrl, { timeout: 60000 });
+                        if (videoBuf && videoBuf.length > 1000) {
+                            await sock.sendMessage(from, { video: videoBuf, caption }, { quoted: msg });
+                            return true;
+                        }
                     }
                 }
                 replyText = `❌ Could not extract TikTok video. Please ensure the video is public and the link is correct.`;
             } catch (e) {
+                console.error('[TikTok Error]:', e.message);
                 replyText = `❌ TikTok download failed: ${e.message}`;
             }
         }
@@ -1352,20 +1414,41 @@ async function handleOwnerCommands(sock, msg, from, text, senderPhone, pushName,
                 if (!videoId) {
                     replyText = `❌ Invalid YouTube URL. Could not extract video ID.`;
                 } else {
-                    const pipedRes = await fetchJson(`https://api.piped.private.coffee/streams/${videoId}`);
+                    const pipedRes = await fetchJson(`https://api.piped.private.coffee/streams/${videoId}`, { timeout: 25000 });
                     if (pipedRes && pipedRes.videoStreams && pipedRes.videoStreams.length > 0) {
                         const stream = pipedRes.videoStreams.find(s => s.format === 'MPEG_4' && !s.videoOnly) || pipedRes.videoStreams[0];
                         if (stream?.url) {
-                            const videoBuf = await fetchBuffer(stream.url);
-                            const caption = `🎬 *${pipedRes.title || 'YouTube Video'}*\n👤 *Uploader:* ${pipedRes.uploader || 'YouTube'}\n⚡ *Alexa Covert Downloader*`;
-                            await sock.sendMessage(from, { video: videoBuf, caption }, { quoted: msg });
-                            return true;
+                            const videoBuf = await fetchBuffer(stream.url, { timeout: 60000 });
+                            if (videoBuf && videoBuf.length > 1000) {
+                                const caption = `🎬 *${pipedRes.title || 'YouTube Video'}*\n👤 *Uploader:* ${pipedRes.uploader || 'YouTube'}\n⚡ *Alexa Covert Downloader*`;
+                                await sock.sendMessage(from, { video: videoBuf, caption }, { quoted: msg });
+                                return true;
+                            }
                         }
                     }
                     replyText = `❌ Video streams temporarily unavailable. You can watch online at: ${url}`;
                 }
             } catch (ytErr) {
+                console.error('[YouTube Error]:', ytErr.message);
                 replyText = `❌ YouTube download failed: ${ytErr.message}`;
+            }
+        }
+    }
+
+    // 18b. .ig / .instagram <url> (Instagram Downloader)
+    else if (cmd.startsWith('.ig ') || cmd.startsWith('ig ') || cmd.startsWith('.instagram ') || cmd.startsWith('instagram ')) {
+        const urlMatch = raw.match(/https?:\/\/[^\s]+/i);
+        let url = urlMatch ? urlMatch[0] : null;
+        if (!url) {
+            replyText = `📥 *Instagram Downloader*\nPlease provide a valid Instagram link!\nExample: *.ig https://www.instagram.com/reel/...*`;
+        } else {
+            try {
+                await sock.sendMessage(from, { text: `⏳ *Alexa Covert downloading Instagram media...*` }, { quoted: msg });
+                
+                // Instagram public oembed fallback / info
+                replyText = `📱 *Instagram Media*\nTo download this post/reel, open the link directly:\n🔗 ${url}\n\n⚡ *Alexa Covert Downloader*`;
+            } catch (igErr) {
+                replyText = `❌ Instagram download failed: ${igErr.message}`;
             }
         }
     }
@@ -1834,17 +1917,33 @@ async function startBot() {
             const tikMatch = text.match(/https?:\/\/(?:www\.|vm\.|vt\.)?tiktok\.com\/[^\s]+/i);
             if (tikMatch && tikMatch[0]) {
                 try {
+                    let tikUrl = tikMatch[0];
                     await sock.sendMessage(from, { text: `⏳ *Alexa Covert downloading TikTok video...*` }, { quoted: msg });
-                    const tikRes = await fetchJson(`https://www.tikwm.com/api/?url=${encodeURIComponent(tikMatch[0])}`);
+                    if (tikUrl.includes('vt.tiktok.com') || tikUrl.includes('vm.tiktok.com')) {
+                        try {
+                            const exp = await resolveRedirectUrl(tikUrl);
+                            if (exp) tikUrl = exp;
+                        } catch (e) {}
+                    }
+
+                    let tikRes = await fetchJson(`https://www.tikwm.com/api/?url=${encodeURIComponent(tikUrl)}`);
+                    if ((!tikRes || tikRes.code !== 0) && tikUrl.includes('tiktok.com')) {
+                        try {
+                            tikRes = await fetchJson(`https://tikwm.com/api/?url=${encodeURIComponent(tikUrl)}`);
+                        } catch (e) {}
+                    }
+
                     if (tikRes && tikRes.code === 0 && tikRes.data) {
                         const data = tikRes.data;
                         const videoUrl = data.play || data.wmplay || data.hdplay;
                         const caption = `🎬 *TikTok Video Downloaded*\n━━━━━━━━━━━━━━━━━━━━━\n📝 *Title:* ${data.title || 'TikTok Video'}\n👤 *Author:* ${data.author?.nickname || 'Unknown'} (@${data.author?.unique_id || ''})\n❤️ *Likes:* ${data.digg_count || 0} | 💬 *Comments:* ${data.comment_count || 0}\n━━━━━━━━━━━━━━━━━━━━━\n⚡ *Alexa Covert Downloader*`;
 
                         if (videoUrl) {
-                            const videoBuf = await fetchBuffer(videoUrl);
-                            await sock.sendMessage(from, { video: videoBuf, caption }, { quoted: msg });
-                            continue;
+                            const videoBuf = await fetchBuffer(videoUrl, { timeout: 60000 });
+                            if (videoBuf && videoBuf.length > 1000) {
+                                await sock.sendMessage(from, { video: videoBuf, caption }, { quoted: msg });
+                                continue;
+                            }
                         }
                     }
                 } catch (e) {
@@ -1858,14 +1957,16 @@ async function startBot() {
                 try {
                     const videoId = ytMatch[1];
                     await sock.sendMessage(from, { text: `⏳ *Alexa Covert downloading YouTube video...*` }, { quoted: msg });
-                    const pipedRes = await fetchJson(`https://api.piped.private.coffee/streams/${videoId}`);
+                    const pipedRes = await fetchJson(`https://api.piped.private.coffee/streams/${videoId}`, { timeout: 25000 });
                     if (pipedRes && pipedRes.videoStreams && pipedRes.videoStreams.length > 0) {
                         const stream = pipedRes.videoStreams.find(s => s.format === 'MPEG_4' && !s.videoOnly) || pipedRes.videoStreams[0];
                         if (stream?.url) {
-                            const videoBuf = await fetchBuffer(stream.url);
-                            const caption = `🎬 *${pipedRes.title || 'YouTube Video'}*\n👤 *Uploader:* ${pipedRes.uploader || 'YouTube'}\n⚡ *Alexa Covert Downloader*`;
-                            await sock.sendMessage(from, { video: videoBuf, caption }, { quoted: msg });
-                            continue;
+                            const videoBuf = await fetchBuffer(stream.url, { timeout: 60000 });
+                            if (videoBuf && videoBuf.length > 1000) {
+                                const caption = `🎬 *${pipedRes.title || 'YouTube Video'}*\n👤 *Uploader:* ${pipedRes.uploader || 'YouTube'}\n⚡ *Alexa Covert Downloader*`;
+                                await sock.sendMessage(from, { video: videoBuf, caption }, { quoted: msg });
+                                continue;
+                            }
                         }
                     }
                 } catch (e) {
@@ -1875,7 +1976,7 @@ async function startBot() {
 
             // 10. Check if user ran a personal assistant command directly (.play, .lyrics, .ai, etc.)
             const trimmedCmd = text.trim();
-            if (/^(?:\.play|play|\.lyrics|lyrics|\.ai|ai|\.tts|tts|\.tiktok|tiktok|\.yt|yt|\.youtube|youtube|\.s|s|\.sticker|sticker|\.save|save)\b/i.test(trimmedCmd)) {
+            if (/^(?:\.play|play|\.lyrics|lyrics|\.ai|ai|\.tts|tts|\.tiktok|tiktok|\.yt|yt|\.youtube|youtube|\.ig|ig|\.instagram|instagram|\.s|s|\.sticker|sticker|\.save|save)\b/i.test(trimmedCmd)) {
                 const handledAssistant = await handleOwnerCommands(sock, msg, from, trimmedCmd, senderPhone, pushName, false);
                 if (handledAssistant) continue;
             }
