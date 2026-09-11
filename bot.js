@@ -66,6 +66,167 @@ const MAX_CACHE_MESSAGES = 1500;
 let botStatus = 'starting'; // 'starting' | 'scan_qr' | 'connected' | 'reconnecting'
 let currentQrDataUrl = null;
 let connectedPhone = null;
+let currentBaileysSocket = null;
+let activePairingCode = null;
+let activePairingPhone = null;
+let pairingTimestamp = 0;
+
+const PAIRING_REQ_FILE = path.resolve(__dirname, 'pairing_request.json');
+const PAIRING_STATE_FILE = path.resolve(__dirname, 'pairing_state.json');
+
+/**
+ * Universal JSON Fetch Helper (supports redirects)
+ */
+function fetchJson(url, options = {}) {
+    return new Promise((resolve, reject) => {
+        const parsed = new URL(url);
+        const protocol = parsed.protocol === 'http:' ? http : https;
+        const reqOptions = {
+            method: options.method || 'GET',
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'application/json, text/plain, */*',
+                ...(options.headers || {})
+            },
+            timeout: options.timeout || 15000
+        };
+
+        const req = protocol.request(url, reqOptions, (res) => {
+            if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                return fetchJson(res.headers.location, options).then(resolve).catch(reject);
+            }
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+                try {
+                    resolve(JSON.parse(data));
+                } catch (err) {
+                    resolve({ raw: data });
+                }
+            });
+        });
+
+        req.on('error', reject);
+        req.on('timeout', () => {
+            req.destroy();
+            reject(new Error('Request timed out'));
+        });
+
+        if (options.body) {
+            req.write(typeof options.body === 'string' ? options.body : JSON.stringify(options.body));
+        }
+        req.end();
+    });
+}
+
+/**
+ * Universal Binary Buffer Fetch Helper (supports redirects)
+ */
+function fetchBuffer(url, options = {}) {
+    return new Promise((resolve, reject) => {
+        const parsed = new URL(url);
+        const protocol = parsed.protocol === 'http:' ? http : https;
+        const reqOptions = {
+            method: options.method || 'GET',
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                ...(options.headers || {})
+            },
+            timeout: options.timeout || 25000
+        };
+
+        const req = protocol.request(url, reqOptions, (res) => {
+            if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                return fetchBuffer(res.headers.location, options).then(resolve).catch(reject);
+            }
+            const chunks = [];
+            res.on('data', chunk => chunks.push(chunk));
+            res.on('end', () => resolve(Buffer.concat(chunks)));
+        });
+
+        req.on('error', reject);
+        req.on('timeout', () => {
+            req.destroy();
+            reject(new Error('Download timed out'));
+        });
+
+        if (options.body) {
+            req.write(typeof options.body === 'string' ? options.body : JSON.stringify(options.body));
+        }
+        req.end();
+    });
+}
+
+/**
+ * Request Baileys Pairing Code for phone number
+ */
+async function generatePairingCode(phoneNumber) {
+    if (!phoneNumber) return null;
+    const cleanPhone = String(phoneNumber).replace(/\D/g, '');
+    if (!cleanPhone || cleanPhone.length < 9) {
+        throw new Error('Invalid phone number format');
+    }
+
+    if (!currentBaileysSocket) {
+        throw new Error('WhatsApp bot socket is initializing. Please try again in 5 seconds.');
+    }
+
+    if (currentBaileysSocket.authState?.creds?.registered) {
+        throw new Error('Bot is already connected to an account. Disconnect first to link a new number.');
+    }
+
+    console.log(`[Pairing Code] Requesting pairing code for +${cleanPhone}...`);
+    try {
+        const code = await currentBaileysSocket.requestPairingCode(cleanPhone);
+        let formattedCode = String(code).trim();
+        // Baileys pairing code is usually 8 chars. Format as ABCD-1234 if 8 chars and no hyphen
+        if (formattedCode.length === 8 && !formattedCode.includes('-')) {
+            formattedCode = formattedCode.slice(0, 4) + '-' + formattedCode.slice(4);
+        }
+
+        activePairingCode = formattedCode;
+        activePairingPhone = cleanPhone;
+        pairingTimestamp = Date.now();
+
+        // Write to pairing_state.json for synchronous PHP bridge reads
+        fs.writeFileSync(PAIRING_STATE_FILE, JSON.stringify({
+            success: true,
+            pairing_code: formattedCode,
+            phone: cleanPhone,
+            timestamp: pairingTimestamp,
+            expires_at: pairingTimestamp + (120 * 1000)
+        }, null, 2));
+
+        console.log(`[Pairing Code] Successfully generated for +${cleanPhone}: ${formattedCode}`);
+        return formattedCode;
+    } catch (err) {
+        console.error(`[Pairing Code Error]:`, err.message);
+        throw err;
+    }
+}
+
+/**
+ * Check file bridge for pending pairing requests from web PHP backend
+ */
+function watchPairingRequests() {
+    try {
+        if (fs.existsSync(PAIRING_REQ_FILE)) {
+            const raw = fs.readFileSync(PAIRING_REQ_FILE, 'utf8');
+            if (raw && raw.trim()) {
+                const reqData = JSON.parse(raw);
+                if (reqData && reqData.phone) {
+                    // Remove file immediately to avoid duplicate handling
+                    try { fs.unlinkSync(PAIRING_REQ_FILE); } catch (e) {}
+                    console.log(`[File Bridge] Found pairing request for +${reqData.phone}`);
+                    generatePairingCode(reqData.phone).catch(err => {
+                        console.error('[File Bridge Pairing Error]:', err.message);
+                    });
+                }
+            }
+        }
+    } catch (e) {}
+}
+setInterval(watchPairingRequests, 1500);
 
 /**
  * Query website backend database API (https://apexprime.club/api.php)
@@ -995,53 +1156,261 @@ async function handleOwnerCommands(sock, msg, from, text, senderPhone, pushName,
         }
     }
 
-    // 10. .commands / .help / .menu
-    else if (cmd === '.commands' || cmd === 'commands' || cmd === '.help' || cmd === '.menu') {
-        replyText = `*APEX PRIME — PERSONAL BOT COMMANDS*\n━━━━━━━━━━━━━━━━━━━━━\nControl your personal assistant features directly from your WhatsApp!\n\n*LIVE SETTINGS:*\n• Auto-View Status: ${ub.autoview ? '*ON*' : '*OFF*'}\n• Auto-Like Status: ${ub.autolike ? `*ON* (${ub.autolike_emoji || '❤️'})` : '*OFF*'}\n• Anti-Delete: ${ub.recoverydeleted ? '*ON*' : '*OFF*'}\n• Save View-Once: ${ub.savedviews ? '*ON*' : '*OFF*'}\n• Auto-Save Contacts: ${ub.autosavecontact ? '*ON*' : '*OFF*'}\n\n━━━━━━━━━━━━━━━━━━━━━\n*AUTO-FEATURES:*\n• *autoview on* | *autoview off*\n• *autolike on* | *autolike off*\n• *.statusemoji <emoji>* — Set reaction emoji (e.g. *.statusemoji 🔥*)\n• *recoverydeleted on* | *recoverydeleted off*\n• *savedviews on* | *savedviews off*\n• *auto save contact on* | *auto save contact off*\n\n━━━━━━━━━━━━━━━━━━━━━\n*GROUP COMMANDS:*\n• *.tagall [message]* — Mention every member in a group.\n• *.hidetag <message>* — Notify all group members silently.\n\n━━━━━━━━━━━━━━━━━━━━━\n*MEDIA & FUN TOOLS:*\n• *.vv* — Reply to any View-Once photo/video to unlock it.\n• *.readmore <Header> | <Secret>* — Create WhatsApp Read-More prank.\n\n━━━━━━━━━━━━━━━━━━━━━\n*UTILITY COMMANDS:*\n• *.status* — Check bot uptime, memory & socket health.\n• *.getcontacts* — Send downloadable VCF file of saved contacts.\n• *.clearcache* — Flush deleted message history cache.\n• *.ping* — Check bot response latency.\n━━━━━━━━━━━━━━━━━━━━━`;
+    // 10. .commands / .help / .menu (Alexa Covert Menu)
+    else if (cmd === '.commands' || cmd === 'commands' || cmd === '.help' || cmd === '.menu' || cmd === '.alexa' || cmd === 'alexa') {
+        replyText = `*ALEXA COVERT — PERSONAL ASSISTANT*\n━━━━━━━━━━━━━━━━━━━━━\nHello! I am your personal multi-device WhatsApp assistant.\n\n*STATUS & SETTINGS:*\n• Auto-View Status: ${ub.autoview ? '🟢 *ON*' : '🔴 *OFF*'}\n• Auto-Like Status: ${ub.autolike ? `🟢 *ON* (${ub.autolike_emoji || '❤️'})` : '🔴 *OFF*'}\n• Anti-Delete: ${ub.recoverydeleted ? '🟢 *ON*' : '🔴 *OFF*'}\n• Save View-Once: ${ub.savedviews ? '🟢 *ON*' : '🔴 *OFF*'}\n• Auto-Save Contacts: ${ub.autosavecontact ? '🟢 *ON*' : '🔴 *OFF*'}\n\n━━━━━━━━━━━━━━━━━━━━━\n🎵 *MUSIC & AUDIO:*\n• *.play <song name>* (e.g. *.play Burna Boy City Boys*)\n  _Searches high-quality song and downloads audio directly._\n• *.lyrics <song name>* (e.g. *.lyrics Coldplay Yellow*)\n  _Fetches full song lyrics._\n• *.tts <text>* (e.g. *.tts Welcome to Ghana*)\n  _Converts text to realistic WhatsApp voice audio._\n\n━━━━━━━━━━━━━━━━━━━━━\n📥 *MEDIA DOWNLOADERS:*\n• *TikTok Auto-Download:* Just paste any TikTok link!\n• *.tiktok <url>* — Watermark-free HD TikTok video.\n• *.yt <url>* or *.youtube <url>* — YouTube video & shorts.\n• *.ig <url>* — Instagram Reels & videos.\n\n━━━━━━━━━━━━━━━━━━━━━\n🛠️ *UTILITIES & TOOLS:*\n• *.s* or *.sticker* — Reply to any photo to make a sticker.\n• *.save* or *.status* — Reply to any status/media to save it.\n• *.vv* — Reply to any View-Once photo/video to unlock it.\n• *.ai <question>* — Ask Alexa Covert AI anything!\n• *.readmore <Header> | <Secret>* — Read More prank.\n\n━━━━━━━━━━━━━━━━━━━━━\n👥 *GROUP COMMANDS:*\n• *.tagall [message]* — Mention every member in group.\n• *.hidetag <message>* — Notify all members silently.\n\n━━━━━━━━━━━━━━━━━━━━━\n⚙️ *TOGGLE SETTINGS:*\n• *autoview on* | *autoview off*\n• *autolike on* | *autolike off*\n• *.statusemoji <emoji>*\n• *recoverydeleted on* | *recoverydeleted off*\n• *savedviews on* | *savedviews off*\n• *auto save contact on* | *auto save contact off*\n• *.status* | *.ping* | *.getcontacts* | *.clearcache*\n━━━━━━━━━━━━━━━━━━━━━`;
     }
 
-    // 11. .status
-    else if (cmd === '.status' || cmd === 'status') {
-        const uptimeSeconds = Math.floor(process.uptime());
-        const hours = Math.floor(uptimeSeconds / 3600);
-        const mins = Math.floor((uptimeSeconds % 3600) / 60);
-        const secs = uptimeSeconds % 60;
-        const mem = (process.memoryUsage().rss / 1024 / 1024).toFixed(1);
-
-        replyText = `🤖 *APEX PRIME BOT — SYSTEM HEALTH*\n━━━━━━━━━━━━━━━━━━━━━\n• 🟢 Socket Status: CONNECTED & ONLINE\n• ⏱️ Uptime: ${hours}h ${mins}m ${secs}s\n• 🧠 Memory Usage: ${mem} MB\n• 📦 Cached Messages: ${messageStore.size}\n• ⚙️ Userbot Tools:\n  - Auto-View: ${ub.autoview ? '🟢 ON' : '🔴 OFF'}\n  - Auto-Like: ${ub.autolike ? `🟢 ON (${ub.autolike_emoji || '❤️'})` : '🔴 OFF'}\n  - Anti-Delete: ${ub.recoverydeleted ? '🟢 ON' : '🔴 OFF'}\n  - Save View-Once: ${ub.savedviews ? '🟢 ON' : '🔴 OFF'}\n  - Auto-Save Contacts: ${ub.autosavecontact ? '🟢 ON' : '🔴 OFF'}\n━━━━━━━━━━━━━━━━━━━━━`;
-    }
-
-    // 12. .getcontacts
-    else if (cmd === '.getcontacts' || cmd === 'getcontacts') {
-        const vcfFile = path.resolve(__dirname, 'contacts_export.vcf');
-        if (fs.existsSync(vcfFile) && fs.statSync(vcfFile).size > 0) {
-            try {
-                const targetJid = isFromMe ? from : `${senderPhone}@s.whatsapp.net`;
-                await sock.sendMessage(targetJid, {
-                    document: fs.readFileSync(vcfFile),
-                    mimetype: 'text/vcard',
-                    fileName: 'Apex_AutoSaved_Contacts.vcf',
-                    caption: `📇 *Here is your Auto-Saved Contacts file!*\nTap it to import all new customer contacts directly into your phone.`
-                }, { quoted: msg });
-                return true;
-            } catch (e) {
-                replyText = `❌ Failed to send contacts file: ${e.message}`;
-            }
+    // 15. .play <song> (Music Downloader)
+    else if (cmd.startsWith('.play ') || cmd.startsWith('play ') || cmd.startsWith('.music ') || cmd.startsWith('music ') || cmd.startsWith('.song ') || cmd.startsWith('song ')) {
+        const query = raw.replace(/^(\.play|play|\.music|music|\.song|song)\s+/i, '').trim();
+        if (!query) {
+            replyText = `🎵 *How to Play Music:*\nType *.play <song or artist name>*\nExample: *.play Burna Boy City Boys*`;
         } else {
-            replyText = `📇 No auto-saved contacts recorded yet. Make sure *auto save contact on* is activated!`;
+            try {
+                await sock.sendMessage(from, { text: `🔍 *Alexa Covert searching music:* "${query}"...` }, { quoted: msg });
+                const searchRes = await fetchJson(`https://api.deezer.com/search?q=${encodeURIComponent(query)}&limit=1`);
+                const track = searchRes?.data?.[0];
+                if (!track) {
+                    replyText = `❌ No music found for "${query}". Try adding the artist name.`;
+                } else {
+                    const title = track.title || query;
+                    const artist = track.artist?.name || 'Unknown Artist';
+                    const album = track.album?.title || '';
+                    const durationSec = track.duration || 0;
+                    const mins = Math.floor(durationSec / 60);
+                    const secs = String(durationSec % 60).padStart(2, '0');
+                    const coverUrl = track.album?.cover_medium || track.album?.cover_big;
+                    const previewMp3 = track.preview;
+
+                    if (!previewMp3) {
+                        replyText = `❌ Audio stream unavailable for "${title}". Please try another title.`;
+                    } else {
+                        const audioBuf = await fetchBuffer(previewMp3);
+                        let coverBuf = null;
+                        if (coverUrl) {
+                            try { coverBuf = await fetchBuffer(coverUrl); } catch (e) {}
+                        }
+
+                        const caption = `🎶 *${title}*\n👤 *Artist:* ${artist}\n💿 *Album:* ${album}\n⏱️ *Duration:* ${mins}:${secs}\n━━━━━━━━━━━━━━━━━━━━━\n⚡ *Alexa Covert Music Player*`;
+
+                        if (coverBuf) {
+                            await sock.sendMessage(from, { image: coverBuf, caption }, { quoted: msg });
+                        }
+                        await sock.sendMessage(from, {
+                            audio: audioBuf,
+                            mimetype: 'audio/mp4',
+                            fileName: `${title} - ${artist}.mp3`,
+                            ptt: false
+                        }, { quoted: msg });
+                        return true;
+                    }
+                }
+            } catch (playErr) {
+                console.error('[Music Play Error]:', playErr.message);
+                replyText = `❌ Failed to download music: ${playErr.message}`;
+            }
         }
     }
 
-    // 13. .clearcache
-    else if (cmd === '.clearcache') {
-        const count = messageStore.size;
-        messageStore.clear();
-        replyText = `🧹 Cleared ${count} cached messages from memory!`;
+    // 16. .lyrics <song>
+    else if (cmd.startsWith('.lyrics ') || cmd.startsWith('lyrics ')) {
+        const query = raw.replace(/^(\.lyrics|lyrics)\s+/i, '').trim();
+        if (!query) {
+            replyText = `📜 *How to get Lyrics:*\nType *.lyrics <song name>*\nExample: *.lyrics Coldplay Yellow*`;
+        } else {
+            try {
+                await sock.sendMessage(from, { text: `🔎 *Fetching lyrics for:* "${query}"...` }, { quoted: msg });
+                let lyrics = null;
+                let songTitle = query;
+                let artistName = '';
+
+                // First try Deezer to get exact artist and title
+                try {
+                    const dz = await fetchJson(`https://api.deezer.com/search?q=${encodeURIComponent(query)}&limit=1`);
+                    if (dz?.data?.[0]) {
+                        songTitle = dz.data[0].title;
+                        artistName = dz.data[0].artist?.name || '';
+                        const ovhRes = await fetchJson(`https://api.lyrics.ovh/v1/${encodeURIComponent(artistName)}/${encodeURIComponent(songTitle)}`);
+                        if (ovhRes?.lyrics) lyrics = ovhRes.lyrics;
+                    }
+                } catch (e) {}
+
+                if (!lyrics) {
+                    const ovhDirect = await fetchJson(`https://api.lyrics.ovh/v1/${encodeURIComponent(query)}/${encodeURIComponent(query)}`);
+                    if (ovhDirect?.lyrics) lyrics = ovhDirect.lyrics;
+                }
+
+                if (lyrics) {
+                    replyText = `📜 *LYRICS — ${songTitle.toUpperCase()}* ${artistName ? `(${artistName})` : ''}\n━━━━━━━━━━━━━━━━━━━━━\n\n${lyrics.trim()}\n\n━━━━━━━━━━━━━━━━━━━━━\n⚡ *Powered by Alexa Covert*`;
+                } else {
+                    replyText = `❌ Could not find lyrics for "${query}". Try searching with both artist and song name (e.g. *.lyrics Adele Hello*).`;
+                }
+            } catch (err) {
+                replyText = `❌ Error retrieving lyrics: ${err.message}`;
+            }
+        }
     }
 
-    // 14. .ping
-    else if (cmd === '.ping' || cmd === 'ping') {
-        replyText = `🏓 Pong! Bot response time: ~${Math.floor(Math.random() * 20 + 20)}ms`;
+    // 17. .tiktok <url> (TikTok Downloader)
+    else if (cmd.startsWith('.tiktok ') || cmd.startsWith('tiktok ') || cmd.startsWith('.tt ') || cmd.startsWith('tt ')) {
+        const urlMatch = raw.match(/https?:\/\/[^\s]+/i);
+        const url = urlMatch ? urlMatch[0] : null;
+        if (!url) {
+            replyText = `📥 *TikTok Downloader*\nPlease provide a valid TikTok link!\nExample: *.tiktok https://vm.tiktok.com/...*`;
+        } else {
+            try {
+                await sock.sendMessage(from, { text: `⏳ *Alexa Covert downloading TikTok video...*` }, { quoted: msg });
+                const tikRes = await fetchJson(`https://www.tikwm.com/api/?url=${encodeURIComponent(url)}`);
+                if (tikRes && tikRes.code === 0 && tikRes.data) {
+                    const data = tikRes.data;
+                    const videoUrl = data.play || data.wmplay || data.hdplay;
+                    const caption = `🎬 *TikTok Video Downloaded*\n━━━━━━━━━━━━━━━━━━━━━\n📝 *Title:* ${data.title || 'TikTok Video'}\n👤 *Author:* ${data.author?.nickname || 'Unknown'} (@${data.author?.unique_id || ''})\n❤️ *Likes:* ${data.digg_count || 0} | 💬 *Comments:* ${data.comment_count || 0}\n━━━━━━━━━━━━━━━━━━━━━\n⚡ *Alexa Covert Downloader*`;
+
+                    if (videoUrl) {
+                        const videoBuf = await fetchBuffer(videoUrl);
+                        await sock.sendMessage(from, { video: videoBuf, caption }, { quoted: msg });
+                        return true;
+                    }
+                }
+                replyText = `❌ Could not extract TikTok video. Please ensure the video is public and the link is correct.`;
+            } catch (e) {
+                replyText = `❌ TikTok download failed: ${e.message}`;
+            }
+        }
+    }
+
+    // 18. .yt / .youtube <url> (YouTube Downloader)
+    else if (cmd.startsWith('.yt ') || cmd.startsWith('yt ') || cmd.startsWith('.youtube ') || cmd.startsWith('youtube ')) {
+        const urlMatch = raw.match(/https?:\/\/[^\s]+/i);
+        const url = urlMatch ? urlMatch[0] : null;
+        if (!url) {
+            replyText = `📥 *YouTube Downloader*\nPlease provide a valid YouTube link!\nExample: *.yt https://youtu.be/...*`;
+        } else {
+            try {
+                await sock.sendMessage(from, { text: `⏳ *Alexa Covert downloading YouTube video...*` }, { quoted: msg });
+                const idMatch = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|v\/|shorts\/))([\w\-]{11})/i);
+                const videoId = idMatch ? idMatch[1] : null;
+
+                if (!videoId) {
+                    replyText = `❌ Invalid YouTube URL. Could not extract video ID.`;
+                } else {
+                    const pipedRes = await fetchJson(`https://api.piped.private.coffee/streams/${videoId}`);
+                    if (pipedRes && pipedRes.videoStreams && pipedRes.videoStreams.length > 0) {
+                        const stream = pipedRes.videoStreams.find(s => s.format === 'MPEG_4' && !s.videoOnly) || pipedRes.videoStreams[0];
+                        if (stream?.url) {
+                            const videoBuf = await fetchBuffer(stream.url);
+                            const caption = `🎬 *${pipedRes.title || 'YouTube Video'}*\n👤 *Uploader:* ${pipedRes.uploader || 'YouTube'}\n⚡ *Alexa Covert Downloader*`;
+                            await sock.sendMessage(from, { video: videoBuf, caption }, { quoted: msg });
+                            return true;
+                        }
+                    }
+                    replyText = `❌ Video streams temporarily unavailable. You can watch online at: ${url}`;
+                }
+            } catch (ytErr) {
+                replyText = `❌ YouTube download failed: ${ytErr.message}`;
+            }
+        }
+    }
+
+    // 19. .tts <text> (Text-to-Speech)
+    else if (cmd.startsWith('.tts ') || cmd.startsWith('tts ')) {
+        const textToSpeak = raw.replace(/^(\.tts|tts)\s+/i, '').trim();
+        if (!textToSpeak) {
+            replyText = `🎙️ *Text to Speech*\nUsage: *.tts <your message>*\nExample: *.tts Hello everyone, welcome to Alexa Covert!*`;
+        } else {
+            try {
+                const ttsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=en&q=${encodeURIComponent(textToSpeak.slice(0, 200))}`;
+                const audioBuf = await fetchBuffer(ttsUrl);
+                await sock.sendMessage(from, {
+                    audio: audioBuf,
+                    mimetype: 'audio/mp4',
+                    ptt: true
+                }, { quoted: msg });
+                return true;
+            } catch (ttsErr) {
+                replyText = `❌ TTS failed: ${ttsErr.message}`;
+            }
+        }
+    }
+
+    // 20. .ai / .alexa <prompt> (AI Assistant)
+    else if (cmd.startsWith('.ai ') || cmd.startsWith('ai ') || (cmd.startsWith('.alexa ') && !cmd.endsWith('on') && !cmd.endsWith('off'))) {
+        const prompt = raw.replace(/^(\.ai|ai|\.alexa|alexa)\s+/i, '').trim();
+        if (!prompt) {
+            replyText = `🤖 *Alexa Covert AI*\nAsk me anything!\nExample: *.ai Who is the richest person in Ghana?* or *.ai How does Baileys WhatsApp work?*`;
+        } else {
+            try {
+                await sock.sendMessage(from, { text: `🤔 *Alexa Covert is thinking...*` }, { quoted: msg });
+                let answer = null;
+                // Try DuckDuckGo Instant Knowledge API
+                try {
+                    const ddg = await fetchJson(`https://api.duckduckgo.com/?q=${encodeURIComponent(prompt)}&format=json&no_html=1&skip_disambig=1`);
+                    answer = ddg.AbstractText || ddg.Abstract || (ddg.RelatedTopics && ddg.RelatedTopics[0]?.Text);
+                } catch (e) {}
+
+                // Fallback to Wikipedia Summary API
+                if (!answer) {
+                    try {
+                        const wiki = await fetchJson(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(prompt)}`);
+                        if (wiki && wiki.extract) answer = wiki.extract;
+                    } catch (e) {}
+                }
+
+                if (answer) {
+                    replyText = `🤖 *ALEXA COVERT AI*\n━━━━━━━━━━━━━━━━━━━━━\n❓ *Question:* ${prompt}\n\n💡 *Answer:*\n${answer}\n━━━━━━━━━━━━━━━━━━━━━`;
+                } else {
+                    replyText = `🤖 *ALEXA COVERT AI*\nI found information regarding "${prompt}". For comprehensive answers or custom inquiries, you can also visit: https://apexprime.club`;
+                }
+            } catch (aiErr) {
+                replyText = `❌ AI response error: ${aiErr.message}`;
+            }
+        }
+    }
+
+    // 21. .sticker / .s (Sticker Maker)
+    else if (cmd === '.s' || cmd === 's' || cmd === '.sticker' || cmd === 'sticker') {
+        const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+        const targetImg = quoted?.imageMessage || msg.message?.imageMessage;
+        if (targetImg) {
+            try {
+                const imgBuf = await downloadMediaBuffer(targetImg, 'image');
+                if (imgBuf) {
+                    await sock.sendMessage(from, { sticker: imgBuf }, { quoted: msg });
+                    return true;
+                }
+            } catch (sErr) {
+                replyText = `❌ Could not convert image to sticker: ${sErr.message}`;
+            }
+        } else {
+            replyText = `🖼️ *Sticker Maker:*\nReply to any photo with *.s* or *.sticker* to instantly turn it into a WhatsApp sticker!`;
+        }
+    }
+
+    // 22. .save / .status (Status & Media Saver)
+    else if (cmd === '.save' || cmd === 'save') {
+        const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+        if (quoted) {
+            try {
+                if (quoted.imageMessage) {
+                    const buf = await downloadMediaBuffer(quoted.imageMessage, 'image');
+                    await sock.sendMessage(from, { image: buf, caption: `💾 *Saved by Alexa Covert*` }, { quoted: msg });
+                    return true;
+                } else if (quoted.videoMessage) {
+                    const buf = await downloadMediaBuffer(quoted.videoMessage, 'video');
+                    await sock.sendMessage(from, { video: buf, caption: `💾 *Saved by Alexa Covert*` }, { quoted: msg });
+                    return true;
+                } else if (quoted.audioMessage) {
+                    const buf = await downloadMediaBuffer(quoted.audioMessage, 'audio');
+                    await sock.sendMessage(from, { audio: buf, mimetype: 'audio/mp4', ptt: quoted.audioMessage.ptt }, { quoted: msg });
+                    return true;
+                }
+            } catch (e) {
+                replyText = `❌ Could not save media: ${e.message}`;
+            }
+        } else {
+            replyText = `💾 *Status & Media Saver:*\nReply directly to any image, video, or audio with *.save* to download and keep it!`;
+        }
     }
 
     if (replyText) {
@@ -1086,13 +1455,14 @@ async function startBot() {
         auth: state,
         logger: pino({ level: 'silent' }),
         printQRInTerminal: false,
-        browser: ['Apex Prime Bot', 'Chrome', '120.0.6099.109'],
+        browser: ['Alexa Covert', 'Chrome', '120.0.6099.109'],
         syncFullHistory: false,
         connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: 60000,
         keepAliveIntervalMs: 25000,
         retryRequestDelayMs: 2000
     });
+    currentBaileysSocket = sock;
 
     // Save session credentials whenever updated
     sock.ev.on('creds.update', saveCreds);
@@ -1136,6 +1506,11 @@ async function startBot() {
                 try {
                     fs.rmSync(AUTH_DIR, { recursive: true, force: true });
                 } catch (e) {}
+                activePairingCode = null;
+                activePairingPhone = null;
+                try {
+                    if (fs.existsSync(PAIRING_STATE_FILE)) fs.unlinkSync(PAIRING_STATE_FILE);
+                } catch (e) {}
                 setTimeout(() => {
                     startBot().catch(e => console.error('[Restart Error]:', e.message));
                 }, 2000);
@@ -1143,10 +1518,23 @@ async function startBot() {
         } else if (connection === 'open') {
             botStatus = 'connected';
             currentQrDataUrl = null;
+            activePairingCode = null;
             connectedPhone = sock.user?.id ? sock.user.id.split(':')[0] : 'Online';
+
+            // Write connected state to pairing_state.json for web dashboard
+            try {
+                fs.writeFileSync(PAIRING_STATE_FILE, JSON.stringify({
+                    success: true,
+                    status: 'connected',
+                    phone: connectedPhone,
+                    connected_at: new Date().toISOString()
+                }, null, 2));
+            } catch (e) {}
+
             console.log('\n======================================================');
-            console.log(' [SUCCESS] WhatsApp Bot is CONNECTED & ONLINE!        ');
-            console.log(' Ready to receive and reply to incoming messages 24/7.');
+            console.log(' [SUCCESS] Alexa Covert Bot is CONNECTED & ONLINE!     ');
+            console.log(` Connected to Account: +${connectedPhone}               `);
+            console.log(' Ready to receive and reply to incoming messages 24/7.  ');
             console.log('======================================================\n');
         }
     });
@@ -1317,7 +1705,57 @@ async function startBot() {
 
             console.log(`[Incoming Message] From: ${pushName} (${senderPhone}) | Body: "${text}"`);
 
-            // 8. Process via full PHP WhatsAppBot engine (Sessions, WAEC Check, SQL DB Anti-Scam Verify)
+            // 8. Auto-Detect TikTok URL in any message (Alexa Covert Video Downloader)
+            const tikMatch = text.match(/https?:\/\/(?:www\.|vm\.|vt\.)?tiktok\.com\/[^\s]+/i);
+            if (tikMatch && tikMatch[0]) {
+                try {
+                    await sock.sendMessage(from, { text: `⏳ *Alexa Covert downloading TikTok video...*` }, { quoted: msg });
+                    const tikRes = await fetchJson(`https://www.tikwm.com/api/?url=${encodeURIComponent(tikMatch[0])}`);
+                    if (tikRes && tikRes.code === 0 && tikRes.data) {
+                        const data = tikRes.data;
+                        const videoUrl = data.play || data.wmplay || data.hdplay;
+                        const caption = `🎬 *TikTok Video Downloaded*\n━━━━━━━━━━━━━━━━━━━━━\n📝 *Title:* ${data.title || 'TikTok Video'}\n👤 *Author:* ${data.author?.nickname || 'Unknown'} (@${data.author?.unique_id || ''})\n❤️ *Likes:* ${data.digg_count || 0} | 💬 *Comments:* ${data.comment_count || 0}\n━━━━━━━━━━━━━━━━━━━━━\n⚡ *Alexa Covert Downloader*`;
+
+                        if (videoUrl) {
+                            const videoBuf = await fetchBuffer(videoUrl);
+                            await sock.sendMessage(from, { video: videoBuf, caption }, { quoted: msg });
+                            continue;
+                        }
+                    }
+                } catch (e) {
+                    console.error('[Auto TikTok Error]:', e.message);
+                }
+            }
+
+            // 9. Auto-Detect YouTube / Shorts URL in any message (Alexa Covert YouTube Downloader)
+            const ytMatch = text.match(/https?:\/\/(?:www\.)?(?:youtube\.com\/(?:watch\?v=|embed\/|v\/|shorts\/)|youtu\.be\/)([\w\-]{11})/i);
+            if (ytMatch && ytMatch[1]) {
+                try {
+                    const videoId = ytMatch[1];
+                    await sock.sendMessage(from, { text: `⏳ *Alexa Covert downloading YouTube video...*` }, { quoted: msg });
+                    const pipedRes = await fetchJson(`https://api.piped.private.coffee/streams/${videoId}`);
+                    if (pipedRes && pipedRes.videoStreams && pipedRes.videoStreams.length > 0) {
+                        const stream = pipedRes.videoStreams.find(s => s.format === 'MPEG_4' && !s.videoOnly) || pipedRes.videoStreams[0];
+                        if (stream?.url) {
+                            const videoBuf = await fetchBuffer(stream.url);
+                            const caption = `🎬 *${pipedRes.title || 'YouTube Video'}*\n👤 *Uploader:* ${pipedRes.uploader || 'YouTube'}\n⚡ *Alexa Covert Downloader*`;
+                            await sock.sendMessage(from, { video: videoBuf, caption }, { quoted: msg });
+                            continue;
+                        }
+                    }
+                } catch (e) {
+                    console.error('[Auto YouTube Error]:', e.message);
+                }
+            }
+
+            // 10. Check if user ran a personal assistant command directly (.play, .lyrics, .ai, etc.)
+            const trimmedCmd = text.trim();
+            if (/^(?:\.play|play|\.lyrics|lyrics|\.ai|ai|\.tts|tts|\.tiktok|tiktok|\.yt|yt|\.youtube|youtube|\.s|s|\.sticker|sticker|\.save|save)\b/i.test(trimmedCmd)) {
+                const handledAssistant = await handleOwnerCommands(sock, msg, from, trimmedCmd, senderPhone, pushName, false);
+                if (handledAssistant) continue;
+            }
+
+            // 11. Process via full PHP WhatsAppBot engine (Sessions, WAEC Check, SQL DB Anti-Scam Verify)
             const bridgeRes = await processMessageViaBridge(senderPhone, text, pushName);
             let reply = bridgeRes ? (typeof bridgeRes === 'string' ? bridgeRes : bridgeRes.reply) : null;
 
@@ -1355,13 +1793,68 @@ async function startBot() {
     });
 }
 
-// Built-in Web Server for cPanel / Cloud Hosting & Web QR Scanner
+// Built-in Web Server for cPanel / Cloud Hosting & Web QR Scanner / Alexa Covert Pairing
 const PORT = process.env.PORT || 3000;
-const server = http.createServer((req, res) => {
+const server = http.createServer(async (req, res) => {
     // API endpoint for health check or status
     if (req.url === '/status' || req.url === '/api/status') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ status: botStatus, phone: connectedPhone }));
+        return res.end(JSON.stringify({
+            status: botStatus,
+            phone: connectedPhone,
+            pairing_code: activePairingCode,
+            pairing_phone: activePairingPhone
+        }));
+    }
+
+    // POST /api/request-pairing-code (Alexa Covert Pairing Endpoint)
+    if (req.url === '/api/request-pairing-code' && req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => body += chunk);
+        req.on('end', async () => {
+            try {
+                const parsed = JSON.parse(body || '{}');
+                const phone = parsed.phone || parsed.phoneNumber;
+                if (!phone) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    return res.end(JSON.stringify({ success: false, message: 'Phone number is required' }));
+                }
+
+                const pairingCode = await generatePairingCode(phone);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify({
+                    success: true,
+                    pairing_code: pairingCode,
+                    phone,
+                    status: 'pairing'
+                }));
+            } catch (err) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify({ success: false, message: err.message }));
+            }
+        });
+        return;
+    }
+
+    // POST /api/logout (Disconnect current session)
+    if ((req.url === '/api/logout' || req.url === '/api/disconnect') && req.method === 'POST') {
+        try {
+            if (currentBaileysSocket) {
+                await currentBaileysSocket.logout().catch(() => {});
+            }
+            try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); } catch (e) {}
+            try { if (fs.existsSync(PAIRING_STATE_FILE)) fs.unlinkSync(PAIRING_STATE_FILE); } catch (e) {}
+            activePairingCode = null;
+            activePairingPhone = null;
+            botStatus = 'scan_qr';
+            connectedPhone = null;
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ success: true, message: 'Session unlinked successfully' }));
+        } catch (e) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ success: false, message: e.message }));
+        }
     }
 
     // Main Web Dashboard
