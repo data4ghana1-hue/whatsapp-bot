@@ -218,7 +218,7 @@ async function handleCustomerInteractiveSession(phone, text, name) {
 
             const cost = (priceRes && priceRes.price) ? parseFloat(priceRes.price) : 0;
             if (cost <= 0) {
-                return `Unable to calculate bundle pricing for ${session.data.network} ${gb}GB. Please contact support at 0541145310.`;
+                return `Unable to calculate bundle pricing for ${session.data.network} ${gb}GB. Please contact support at 0553381853.`;
             }
 
             if (session.data.wallet_balance < cost) {
@@ -253,7 +253,7 @@ async function handleCustomerInteractiveSession(phone, text, name) {
             if (statusRes && statusRes.success && statusRes.order) {
                 const o = statusRes.order;
                 const statusEmoji = (o.status === 'completed' || o.status === 'Completed') ? 'Success' : (o.status === 'failed' ? 'Failed' : 'Processing');
-                return `*ORDER STATUS REPORT*\n━━━━━━━━━━━━━━━━━━━━━\nOrder ID: \`#${o.id}\`\nNetwork: ${o.network || 'Data'}\nRecipient: \`${o.recipient_phone || 'N/A'}\`\nBundle: ${o.gb_amount || '1'} GB\nDelivery Status: *${(o.status || 'processing').toUpperCase()}*\nGateway Message: ${o.message || 'Dispatched via Gateway'}\nDate Placed: ${o.created_at || 'Recently'}\n━━━━━━━━━━━━━━━━━━━━━\nNeed help? Contact support at 0541145310.`;
+                return `*ORDER STATUS REPORT*\n━━━━━━━━━━━━━━━━━━━━━\nOrder ID: \`#${o.id}\`\nNetwork: ${o.network || 'Data'}\nRecipient: \`${o.recipient_phone || 'N/A'}\`\nBundle: ${o.gb_amount || '1'} GB\nDelivery Status: *${(o.status || 'processing').toUpperCase()}*\nGateway Message: ${o.message || 'Dispatched via Gateway'}\nDate Placed: ${o.created_at || 'Recently'}\n━━━━━━━━━━━━━━━━━━━━━\nNeed help? Contact support at 0553381853.`;
             } else {
                 return `*Order Not Found*\n━━━━━━━━━━━━━━━━━━━━━\nNo order record matched: \`${raw}\`.\n\nPlease check your Order ID or phone number and try again.\n(Reply *menu* to return to the main menu)`;
             }
@@ -281,7 +281,7 @@ async function handleCustomerInteractiveSession(phone, text, name) {
             // 2. Fallback to PHP CLI bridge
             return new Promise((resolve) => {
                 if (!fs.existsSync(BRIDGE_SCRIPT)) {
-                    return resolve(`*Verification Error*\nUnable to connect to verification gateway. Please try again or contact support at 0541145310.`);
+                    return resolve(`*Verification Error*\nUnable to connect to verification gateway. Please try again or contact support at 0553381853.`);
                 }
                 execFile('php', [BRIDGE_SCRIPT, phone, `verify ${cleanRef}`, name || 'Customer'], { timeout: 15000 }, (error, stdout) => {
                     if (error || !stdout) {
@@ -455,7 +455,7 @@ async function handleCustomerInteractiveSession(phone, text, name) {
             const verifyApiRes = await callWebsiteApi({ op: 'verify_payment', reference: cleanRef, phone, name });
             if (verifyApiRes && verifyApiRes.success && verifyApiRes.reply) return verifyApiRes.reply;
             return new Promise((resolve) => {
-                if (!fs.existsSync(BRIDGE_SCRIPT)) return resolve(`*Verification Error*\nUnable to connect to verification gateway. Please try again or contact support at 0541145310.`);
+                if (!fs.existsSync(BRIDGE_SCRIPT)) return resolve(`*Verification Error*\nUnable to connect to verification gateway. Please try again or contact support at 0553381853.`);
                 execFile('php', [BRIDGE_SCRIPT, phone, `verify ${cleanRef}`, name || 'Customer'], { timeout: 15000 }, (error, stdout) => {
                     if (error || !stdout) return resolve(`*Verification Error*\nUnable to process verification right now. Please try again shortly or contact support.`);
                     try {
@@ -476,7 +476,7 @@ async function handleCustomerInteractiveSession(phone, text, name) {
 
     // 5. Trigger "5" / "talk to an agent" / "agent" / "support"
     if (lower === '5' || lower === '5.' || ['talk to an agent', 'talk to agent', 'agent', 'support', 'human'].includes(lower)) {
-        return `*Talk to an Agent — Apex Prime Tech*\n━━━━━━━━━━━━━━━━━━━━━\nOur customer support team is here to assist you 24/7!\n\nPhone / WhatsApp: *0541145310*\nDirect WhatsApp: https://wa.me/233541145310\nWebsite: https://apexprime.club\n\nPlease send your message or question right here, and an agent will attend to you shortly!`;
+        return `*Talk to an Agent — Apex Prime Tech*\n━━━━━━━━━━━━━━━━━━━━━\nOur customer support team is here to assist you 24/7!\n\nPhone / WhatsApp: *0553381853*\nDirect WhatsApp: https://wa.me/233553381853\nWebsite: https://apexprime.club\n\nPlease send your message or question right here, and an agent will attend to you shortly!`;
     }
 
     // 6. Trigger "balance" / "wallet"
