@@ -421,11 +421,12 @@ async function handleOwnerCommands(sock, msg, from, text, senderPhone, pushName,
         ub.autolike = false;
         saveCommandsConfig(config);
         replyText = `❤️ *Auto-Like Statuses: DEACTIVATED (🔴 OFF)*\nStatus auto-reactions are now turned off.`;
-    } else if (cmd.startsWith('autolike emoji ') || cmd.startsWith('.autolike emoji ')) {
-        const emoji = raw.split(/\s+/)[2] || '❤️';
+    } else if (cmd.startsWith('autolike emoji ') || cmd.startsWith('.autolike emoji ') || cmd.startsWith('.statusemoji ') || cmd.startsWith('statusemoji ') || cmd.startsWith('.setemoji ') || cmd.startsWith('setemoji ')) {
+        const parts = raw.trim().split(/\s+/);
+        const emoji = parts[parts.length - 1] || '❤️';
         ub.autolike_emoji = emoji;
         saveCommandsConfig(config);
-        replyText = `❤️ *Auto-Like Emoji Updated:* ${emoji}`;
+        replyText = `❤️ *Auto-Like Status Emoji Updated:* ${emoji}\nAll future status updates will be reacted to with ${emoji}! (Ensure *autolike on* is active)`;
     }
 
     // 3. recoverydeleted on / off
@@ -461,12 +462,108 @@ async function handleOwnerCommands(sock, msg, from, text, senderPhone, pushName,
         replyText = `📇 *Auto-Save Contacts: DEACTIVATED (🔴 OFF)*\nAuto contact saving is now turned off.`;
     }
 
-    // 6. .commands / .help / .menu
-    else if (cmd === '.commands' || cmd === 'commands' || cmd === '.help' || cmd === '.menu') {
-        replyText = `👑 *APEX PRIME — PERSONAL BOT COMMANDS* 👑\n━━━━━━━━━━━━━━━━━━━━━\nControl your personal assistant features directly from your inbox!\n\n⚙️ *CURRENT LIVE STATUS:*\n• 👁️ Auto-View Statuses: ${ub.autoview ? '🟢 *ON*' : '🔴 *OFF*'}\n• ❤️ Auto-Like Statuses: ${ub.autolike ? `🟢 *ON* (${ub.autolike_emoji || '❤️'})` : '🔴 *OFF*'}\n• 🗑️ Anti-Delete Recovery: ${ub.recoverydeleted ? '🟢 *ON*' : '🔴 *OFF*'}\n• 📸 Anti-View-Once Save: ${ub.savedviews ? '🟢 *ON*' : '🔴 *OFF*'}\n• 📇 Auto-Save Contacts: ${ub.autosavecontact ? '🟢 *ON*' : '🔴 *OFF*'}\n\n━━━━━━━━━━━━━━━━━━━━━\n🛠️ *TOGGLE COMMANDS:*\n• *autoview on* | *autoview off*\n  ↳ Automatically view contact status updates.\n\n• *autolike on* | *autolike off*\n  ↳ React with emoji to status updates.\n\n• *recoverydeleted on* | *recoverydeleted off*\n  ↳ Recovers & forwards deleted messages.\n\n• *savedviews on* | *savedviews off*\n  ↳ Saves view-once images/videos permanently.\n\n• *auto save contact on* | *auto save contact off*\n  ↳ Auto-logs new contacts into a VCF address book.\n\n━━━━━━━━━━━━━━━━━━━━━\n⚡ *UTILITY COMMANDS:*\n• *.status* — Check bot uptime, memory & socket health.\n• *.getcontacts* — Send downloadable VCF file of saved contacts.\n• *.clearcache* — Flush deleted message history cache.\n• *.ping* — Check bot response latency.\n━━━━━━━━━━━━━━━━━━━━━`;
+    // 6. .tagall / .everyone (Group Tagging)
+    else if (cmd.startsWith('.tagall') || cmd.startsWith('tagall') || cmd.startsWith('.everyone') || cmd.startsWith('everyone')) {
+        if (!from.endsWith('@g.us')) {
+            replyText = `❌ *Group Only:* The *.tagall* command can only be used inside WhatsApp groups!`;
+        } else {
+            try {
+                const groupMeta = await sock.groupMetadata(from);
+                const participants = groupMeta.participants || [];
+                const mentions = participants.map(p => p.id);
+                const extraText = raw.replace(/^(\.tagall|tagall|\.everyone|everyone)/i, '').trim();
+
+                let tagMsg = `📢 *GROUP ANNOUNCEMENT* 📢\n👥 *Group:* ${groupMeta.subject}\n`;
+                if (extraText) {
+                    tagMsg += `💬 *Message:* ${extraText}\n`;
+                }
+                tagMsg += `\n━━━━━━━━━━━━━━━━━━━━━\n👥 *Tagged Members (${participants.length}):*\n`;
+                for (const p of participants) {
+                    tagMsg += `• @${p.id.replace(/@.+/, '')}\n`;
+                }
+                tagMsg += `━━━━━━━━━━━━━━━━━━━━━`;
+                await sock.sendMessage(from, { text: tagMsg, mentions }, { quoted: msg });
+                return true;
+            } catch (err) {
+                replyText = `❌ Failed to tag group members: ${err.message}`;
+            }
+        }
     }
 
-    // 7. .status
+    // 7. .hidetag (Silent Group Mention)
+    else if (cmd.startsWith('.hidetag') || cmd.startsWith('hidetag')) {
+        if (!from.endsWith('@g.us')) {
+            replyText = `❌ *Group Only:* The *.hidetag* command can only be used inside WhatsApp groups!`;
+        } else {
+            try {
+                const groupMeta = await sock.groupMetadata(from);
+                const participants = groupMeta.participants || [];
+                const mentions = participants.map(p => p.id);
+                const message = raw.replace(/^(\.hidetag|hidetag)/i, '').trim() || 'Attention everyone!';
+
+                await sock.sendMessage(from, { text: `📢 *Notification:*\n\n${message}`, mentions }, { quoted: msg });
+                return true;
+            } catch (err) {
+                replyText = `❌ Failed to send hidetag: ${err.message}`;
+            }
+        }
+    }
+
+    // 8. .vv (On-Demand View-Once Unlocker)
+    else if (cmd === '.vv' || cmd === 'vv' || cmd === '.viewonce' || cmd === 'viewonce') {
+        const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+        let vo = null;
+        if (quoted) {
+            vo = extractViewOnce({ message: quoted });
+        }
+        if (!vo) {
+            vo = extractViewOnce(msg);
+        }
+
+        if (vo) {
+            try {
+                const buffer = await downloadMediaBuffer(vo.media, vo.type);
+                if (buffer) {
+                    const caption = `🔓 *[Unlocked View-Once Media]*`;
+                    if (vo.type === 'image') {
+                        await sock.sendMessage(from, { image: buffer, caption }, { quoted: msg });
+                    } else if (vo.type === 'video') {
+                        await sock.sendMessage(from, { video: buffer, caption }, { quoted: msg });
+                    } else if (vo.type === 'audio') {
+                        await sock.sendMessage(from, { audio: buffer, mimetype: 'audio/mp4', ptt: true }, { quoted: msg });
+                    }
+                    return true;
+                } else {
+                    replyText = `❌ Could not download media buffer. It may have expired.`;
+                }
+            } catch (e) {
+                replyText = `❌ Error retrieving view-once media: ${e.message}`;
+            }
+        } else {
+            replyText = `⚠️ *How to use .vv:* Reply directly to any View-Once image, video, or audio with *.vv* to unlock and re-send it!`;
+        }
+    }
+
+    // 9. .readmore (WhatsApp Read More Generator)
+    else if (cmd.startsWith('.readmore ') || cmd.startsWith('readmore ')) {
+        const content = raw.replace(/^(\.readmore|readmore)/i, '').trim();
+        const readMoreChar = String.fromCharCode(8206).repeat(4001);
+        if (content.includes('|')) {
+            const parts = content.split('|');
+            const preview = parts[0].trim();
+            const hidden = parts.slice(1).join('|').trim();
+            replyText = `${preview} ${readMoreChar}\n\n${hidden}`;
+        } else {
+            replyText = `${content} ${readMoreChar}\n\n👉 Surprise! This message was hidden behind Read More.`;
+        }
+    }
+
+    // 10. .commands / .help / .menu
+    else if (cmd === '.commands' || cmd === 'commands' || cmd === '.help' || cmd === '.menu') {
+        replyText = `👑 *APEX PRIME — PERSONAL BOT COMMANDS* 👑\n━━━━━━━━━━━━━━━━━━━━━\nControl your personal assistant features directly from your WhatsApp!\n\n⚙️ *LIVE SETTINGS:*\n• 👁️ Auto-View Status: ${ub.autoview ? '🟢 *ON*' : '🔴 *OFF*'}\n• ❤️ Auto-Like Status: ${ub.autolike ? `🟢 *ON* (${ub.autolike_emoji || '❤️'})` : '🔴 *OFF*'}\n• 🗑️ Anti-Delete: ${ub.recoverydeleted ? '🟢 *ON*' : '🔴 *OFF*'}\n• 📸 Save View-Once: ${ub.savedviews ? '🟢 *ON*' : '🔴 *OFF*'}\n• 📇 Auto-Save Contacts: ${ub.autosavecontact ? '🟢 *ON*' : '🔴 *OFF*'}\n\n━━━━━━━━━━━━━━━━━━━━━\n🛠️ *AUTO-FEATURES & EMOJI:*\n• *autoview on* | *autoview off*\n• *autolike on* | *autolike off*\n• *.statusemoji <emoji>* — Set reaction emoji (e.g. *.statusemoji 🔥*)\n• *recoverydeleted on* | *recoverydeleted off*\n• *savedviews on* | *savedviews off*\n• *auto save contact on* | *auto save contact off*\n\n━━━━━━━━━━━━━━━━━━━━━\n👥 *GROUP COMMANDS:*\n• *.tagall [message]* — Mention every member in a group.\n• *.hidetag <message>* — Notify all group members silently.\n\n━━━━━━━━━━━━━━━━━━━━━\n🔓 *MEDIA & FUN TOOLS:*\n• *.vv* — Reply to any View-Once photo/video to unlock it.\n• *.readmore <Header> | <Secret>* — Create WhatsApp Read-More prank.\n\n━━━━━━━━━━━━━━━━━━━━━\n⚡ *UTILITY COMMANDS:*\n• *.status* — Check bot uptime, memory & socket health.\n• *.getcontacts* — Send downloadable VCF file of saved contacts.\n• *.clearcache* — Flush deleted message history cache.\n• *.ping* — Check bot response latency.\n━━━━━━━━━━━━━━━━━━━━━`;
+    }
+
+    // 11. .status
     else if (cmd === '.status' || cmd === 'status') {
         const uptimeSeconds = Math.floor(process.uptime());
         const hours = Math.floor(uptimeSeconds / 3600);
@@ -474,10 +571,10 @@ async function handleOwnerCommands(sock, msg, from, text, senderPhone, pushName,
         const secs = uptimeSeconds % 60;
         const mem = (process.memoryUsage().rss / 1024 / 1024).toFixed(1);
 
-        replyText = `🤖 *APEX PRIME BOT — SYSTEM HEALTH*\n━━━━━━━━━━━━━━━━━━━━━\n• 🟢 Socket Status: CONNECTED & ONLINE\n• ⏱️ Uptime: ${hours}h ${mins}m ${secs}s\n• 🧠 Memory Usage: ${mem} MB\n• 📦 Cached Messages: ${messageStore.size}\n• ⚙️ Userbot Tools:\n  - Auto-View: ${ub.autoview ? '🟢 ON' : '🔴 OFF'}\n  - Auto-Like: ${ub.autolike ? '🟢 ON' : '🔴 OFF'}\n  - Anti-Delete: ${ub.recoverydeleted ? '🟢 ON' : '🔴 OFF'}\n  - Save View-Once: ${ub.savedviews ? '🟢 ON' : '🔴 OFF'}\n  - Auto-Save Contacts: ${ub.autosavecontact ? '🟢 ON' : '🔴 OFF'}\n━━━━━━━━━━━━━━━━━━━━━`;
+        replyText = `🤖 *APEX PRIME BOT — SYSTEM HEALTH*\n━━━━━━━━━━━━━━━━━━━━━\n• 🟢 Socket Status: CONNECTED & ONLINE\n• ⏱️ Uptime: ${hours}h ${mins}m ${secs}s\n• 🧠 Memory Usage: ${mem} MB\n• 📦 Cached Messages: ${messageStore.size}\n• ⚙️ Userbot Tools:\n  - Auto-View: ${ub.autoview ? '🟢 ON' : '🔴 OFF'}\n  - Auto-Like: ${ub.autolike ? `🟢 ON (${ub.autolike_emoji || '❤️'})` : '🔴 OFF'}\n  - Anti-Delete: ${ub.recoverydeleted ? '🟢 ON' : '🔴 OFF'}\n  - Save View-Once: ${ub.savedviews ? '🟢 ON' : '🔴 OFF'}\n  - Auto-Save Contacts: ${ub.autosavecontact ? '🟢 ON' : '🔴 OFF'}\n━━━━━━━━━━━━━━━━━━━━━`;
     }
 
-    // 8. .getcontacts
+    // 12. .getcontacts
     else if (cmd === '.getcontacts' || cmd === 'getcontacts') {
         const vcfFile = path.resolve(__dirname, 'contacts_export.vcf');
         if (fs.existsSync(vcfFile) && fs.statSync(vcfFile).size > 0) {
@@ -498,14 +595,14 @@ async function handleOwnerCommands(sock, msg, from, text, senderPhone, pushName,
         }
     }
 
-    // 9. .clearcache
+    // 13. .clearcache
     else if (cmd === '.clearcache') {
         const count = messageStore.size;
         messageStore.clear();
         replyText = `🧹 Cleared ${count} cached messages from memory!`;
     }
 
-    // 10. .ping
+    // 14. .ping
     else if (cmd === '.ping' || cmd === 'ping') {
         replyText = `🏓 Pong! Bot response time: ~${Math.floor(Math.random() * 20 + 20)}ms`;
     }
