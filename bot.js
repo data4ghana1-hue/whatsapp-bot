@@ -127,7 +127,7 @@ async function handleCustomerInteractiveSession(phone, text, name) {
     if (['cancel', 'exit', 'stop', 'quit', 'abort', '0'].includes(lower)) {
         if (session) {
             customerSessions.delete(phone);
-            return "❌ *Session Cancelled.*\n\nReply *menu* anytime to view our services.";
+            return "*Session Cancelled.*\n\nReply *menu* anytime to view our services.";
         }
     }
 
@@ -137,7 +137,7 @@ async function handleCustomerInteractiveSession(phone, text, name) {
         if (session.step === 'order_user_code') {
             if (['no account', 'no', 'guest', 'none', 'link', 'pay', 'direct'].includes(lower)) {
                 customerSessions.delete(phone);
-                return "👋 *Instant Online Purchase Link*:\n━━━━━━━━━━━━━━━━━━━━━\nYou can order and pay for Data Bundles, WAEC Result Checkers, or MTN AFA registration directly via our secure link:\n\n👉 https://payroute.name/mr-nipah\n━━━━━━━━━━━━━━━━━━━━━\n_(Or reply with your User Code anytime if you have an account)_";
+                return "*Instant Online Purchase Link*:\n━━━━━━━━━━━━━━━━━━━━━\nYou can order and pay for Data Bundles, WAEC Result Checkers, or MTN AFA registration directly via our secure link:\n\nhttps://payroute.name/mr-nipah\n━━━━━━━━━━━━━━━━━━━━━\n_(Or reply with your User Code anytime if you have an account)_";
             }
 
             const cleanCode = raw.replace(/[^\w]/g, '');
@@ -156,14 +156,14 @@ async function handleCustomerInteractiveSession(phone, text, name) {
 
                 if (bal < 3.50) {
                     customerSessions.delete(phone);
-                    return `👤 *User Verified*: *${user.username}* (\`APEX-${user.id}\`)\n🏷️ *Tier*: *${role}*\n💰 *Wallet Balance*: *GHS ${bal.toFixed(2)}*\n━━━━━━━━━━━━━━━━━━━━━\n⚠️ *Insufficient Wallet Balance*\n\nYour balance is too low to place an order. Please top up your wallet:\n\n📱 *MoMo Number*: \`0530429556\`\n👤 *Account Name*: *Sir Esarq Ent (Eric Fosu)*\n📝 *Payment Reference*: \`APEX-${user.id}\`\n\n🌐 *Or Pay Online Instantly:*\n👉 https://payroute.name/mr-nipah`;
+                    return `*User Verified*: *${user.username}* (\`APEX-${user.id}\`)\n*Tier*: *${role}*\n*Wallet Balance*: *GHS ${bal.toFixed(2)}*\n━━━━━━━━━━━━━━━━━━━━━\n*Insufficient Wallet Balance*\n\nYour balance is too low to place an order. Please top up your wallet:\n\nMoMo Number: \`0530429556\`\nAccount Name: *Sir Esarq Ent (Eric Fosu)*\nPayment Reference: \`APEX-${user.id}\`\n\n*Or Pay Online Instantly:*\nhttps://payroute.name/mr-nipah`;
                 }
 
                 session.step = 'order_select_network';
                 session.timestamp = now;
-                return `👤 *User Verified*: *${user.username}* (\`APEX-${user.id}\`)\n🏷️ *Tier*: *${role}*\n💰 *Wallet Balance*: *GHS ${bal.toFixed(2)}*\n━━━━━━━━━━━━━━━━━━━━━\nPlease choose a network by replying with a number (*1 - 4*):\n\n1️⃣ *MTN Data Bundles*\n2️⃣ *Telecel Data Bundles*\n3️⃣ *AT / AirtelTigo Ishare*\n4️⃣ *MTN AFA Registration*\n\n_(Reply *cancel* anytime to abort)_`;
+                return `*User Verified*: *${user.username}* (\`APEX-${user.id}\`)\n*Tier*: *${role}*\n*Wallet Balance*: *GHS ${bal.toFixed(2)}*\n━━━━━━━━━━━━━━━━━━━━━\nPlease choose a network by replying with a number (*1 - 4*):\n\n1. *MTN Data Bundles*\n2. *Telecel Data Bundles*\n3. *AT / AirtelTigo Ishare*\n4. *MTN AFA Registration*\n\n_(Reply *cancel* anytime to abort)_`;
             } else {
-                return `❌ *User Code Not Found*\n━━━━━━━━━━━━━━━━━━━━━\nUser Code \`${raw}\` was not found in our database.\n\n💡 *Don't have an account?*\nOrder directly via our instant link:\n👉 https://payroute.name/mr-nipah\n\n_(Or re-enter your valid User Code e.g. 317, or reply *cancel* to abort)_`;
+                return `*User Code Not Found*\n━━━━━━━━━━━━━━━━━━━━━\nUser Code \`${raw}\` was not found in our database.\n\n*Don't have an account?*\nOrder directly via our instant link:\nhttps://payroute.name/mr-nipah\n\n_(Or re-enter your valid User Code e.g. 317, or reply *cancel* to abort)_`;
             }
         }
 
@@ -176,13 +176,13 @@ async function handleCustomerInteractiveSession(phone, text, name) {
             else if (lower === '4' || lower.includes('afa')) network = 'AFA';
 
             if (!network) {
-                return `⚠️ *Invalid Option*\nPlease reply with a number from *1 to 4*:\n1️⃣ *MTN Data*\n2️⃣ *Telecel Data*\n3️⃣ *AT Ishare*\n4️⃣ *MTN AFA*\n\n_(Reply *cancel* to abort)_`;
+                return `*Invalid Option*\nPlease reply with a number from *1 to 4*:\n1. *MTN Data*\n2. *Telecel Data*\n3. *AT Ishare*\n4. *MTN AFA*\n\n_(Reply *cancel* to abort)_`;
             }
 
             if (network === 'AFA') {
                 session.step = 'order_afa_details';
                 session.timestamp = now;
-                return `📝 *MTN AFA Registration (GHS 15.00)*\n━━━━━━━━━━━━━━━━━━━━━\nPlease reply with the registration details in this format:\n👉 \`<Phone> <Full Name> <Ghana Card Number>\`\n\n• Example: \`0541145310 Eric Fosu GHA-123456789-0\`\n\n_(Reply *cancel* to abort)_`;
+                return `*MTN AFA Registration (GHS 15.00)*\n━━━━━━━━━━━━━━━━━━━━━\nPlease reply with the registration details in this format:\n👉 \`<Phone> <Full Name> <Ghana Card Number>\`\n\n• Example: \`0541145310 Eric Fosu GHA-123456789-0\`\n\n_(Reply *cancel* to abort)_`;
             }
 
             session.data.network = network;
@@ -192,20 +192,20 @@ async function handleCustomerInteractiveSession(phone, text, name) {
             const priceRes = await callWebsiteApi({ op: 'get_price', network, amount: 1, user_id: session.data.user_id, role: session.data.role });
             const rateStr = (priceRes && priceRes.price) ? ` (Rate: *GHS ${parseFloat(priceRes.price).toFixed(2)} / GB*)` : '';
 
-            return `📱 *${network} Data Bundle Order*\n━━━━━━━━━━━━━━━━━━━━━\n👤 User: *${session.data.username}* (\`APEX-${session.data.user_id}\`)${rateStr}\n💰 Balance: *GHS ${session.data.wallet_balance.toFixed(2)}*\n\nPlease enter the *Recipient Phone Number* and *GB size*:\n👉 Format: \`<phone> <GB>\`\n\n• Example: \`0559623850 2\`\n• Example: \`0241234567 5\`\n\n_(Reply *cancel* to abort)_`;
+            return `*${network} Data Bundle Order*\n━━━━━━━━━━━━━━━━━━━━━\nUser: *${session.data.username}* (\`APEX-${session.data.user_id}\`)${rateStr}\nBalance: *GHS ${session.data.wallet_balance.toFixed(2)}*\n\nPlease enter the *Recipient Phone Number* and *GB size*:\n👉 Format: \`<phone> <GB>\`\n\n• Example: \`0559623850 2\`\n• Example: \`0241234567 5\`\n\n_(Reply *cancel* to abort)_`;
         }
 
         // Step 3: Enter Bundle (<Phone> <GB>)
         if (session.step === 'order_enter_bundle') {
             const bundleMatch = raw.match(/(\d{10,12})\s+(\d+(?:\.\d+)?)/);
             if (!bundleMatch) {
-                return `⚠️ *Invalid Format*\nPlease enter the *recipient phone* and *GB size* separated by a space:\n👉 Example: \`0559623850 2\`\n\n_(Reply *cancel* to abort)_`;
+                return `*Invalid Format*\nPlease enter the *recipient phone* and *GB size* separated by a space:\n👉 Example: \`0559623850 2\`\n\n_(Reply *cancel* to abort)_`;
             }
 
             const recipient = bundleMatch[1];
             const gb = parseFloat(bundleMatch[2]);
             if (gb <= 0) {
-                return `⚠️ Please specify a valid GB amount (e.g. \`0559623850 2\`).`;
+                return `Please specify a valid GB amount (e.g. \`0559623850 2\`).`;
             }
 
             const priceRes = await callWebsiteApi({
@@ -218,11 +218,11 @@ async function handleCustomerInteractiveSession(phone, text, name) {
 
             const cost = (priceRes && priceRes.price) ? parseFloat(priceRes.price) : 0;
             if (cost <= 0) {
-                return `❌ Unable to calculate bundle pricing for ${session.data.network} ${gb}GB. Please contact support at 0541145310.`;
+                return `Unable to calculate bundle pricing for ${session.data.network} ${gb}GB. Please contact support at 0541145310.`;
             }
 
             if (session.data.wallet_balance < cost) {
-                return `⚠️ *Insufficient Balance*\n━━━━━━━━━━━━━━━━━━━━━\nRequired: *GHS ${cost.toFixed(2)}*\nYour Balance: *GHS ${session.data.wallet_balance.toFixed(2)}*\n\nPlease top up your wallet or order directly via:\n👉 https://payroute.name/mr-nipah\n\n_(Reply *cancel* to abort)_`;
+                return `*Insufficient Balance*\n━━━━━━━━━━━━━━━━━━━━━\nRequired: *GHS ${cost.toFixed(2)}*\nYour Balance: *GHS ${session.data.wallet_balance.toFixed(2)}*\n\nPlease top up your wallet or order directly via:\nhttps://payroute.name/mr-nipah\n\n_(Reply *cancel* to abort)_`;
             }
 
             const orderRes = await callWebsiteApi({
@@ -240,9 +240,9 @@ async function handleCustomerInteractiveSession(phone, text, name) {
             if (orderRes && orderRes.success) {
                 const orderId = orderRes.order_id || 'N/A';
                 const newBal = (orderRes.new_balance !== undefined) ? parseFloat(orderRes.new_balance).toFixed(2) : (session.data.wallet_balance - cost).toFixed(2);
-                return `✅ *ORDER PLACED SUCCESSFULLY!* 🚀\n━━━━━━━━━━━━━━━━━━━━━\n📦 *Order ID*: \`#${orderId}\`\n📱 *Network*: ${session.data.network}\n👤 *Recipient*: \`${recipient}\`\n📊 *Data Bundle*: *${gb} GB*\n💵 *Amount Charged*: *GHS ${cost.toFixed(2)}*\n💰 *Remaining Balance*: *GHS ${newBal}*\n⏳ *Status*: Processing (Automated Delivery)\n━━━━━━━━━━━━━━━━━━━━━\nThank you for choosing Apex Prime Tech!`;
+                return `*ORDER PLACED SUCCESSFULLY!*\n━━━━━━━━━━━━━━━━━━━━━\nOrder ID: \`#${orderId}\`\nNetwork: ${session.data.network}\nRecipient: \`${recipient}\`\nData Bundle: *${gb} GB*\nAmount Charged: *GHS ${cost.toFixed(2)}*\nRemaining Balance: *GHS ${newBal}*\nStatus: Processing (Automated Delivery)\n━━━━━━━━━━━━━━━━━━━━━\nThank you for choosing Apex Prime Tech!`;
             } else {
-                return `❌ *Order Failed*: ${orderRes?.message || 'Server error processing order'}. Your wallet was not debited. Please try again or contact support.`;
+                return `*Order Failed*: ${orderRes?.message || 'Server error processing order'}. Your wallet was not debited. Please try again or contact support.`;
             }
         }
 
@@ -252,11 +252,48 @@ async function handleCustomerInteractiveSession(phone, text, name) {
             const statusRes = await callWebsiteApi({ op: 'check_status', search: raw });
             if (statusRes && statusRes.success && statusRes.order) {
                 const o = statusRes.order;
-                const statusEmoji = (o.status === 'completed' || o.status === 'Completed') ? '✅' : (o.status === 'failed' ? '❌' : '⏳');
-                return `📦 *ORDER STATUS REPORT* 📦\n━━━━━━━━━━━━━━━━━━━━━\n🔢 *Order ID*: \`#${o.id}\`\n📱 *Network*: ${o.network || 'Data'}\n👤 *Recipient*: \`${o.recipient_phone || 'N/A'}\`\n📊 *Bundle*: ${o.gb_amount || '1'} GB\n${statusEmoji} *Delivery Status*: *${(o.status || 'processing').toUpperCase()}*\n📝 *Gateway Message*: ${o.message || 'Dispatched via Gateway'}\n📅 *Date Placed*: ${o.created_at || 'Recently'}\n━━━━━━━━━━━━━━━━━━━━━\nNeed help? Contact support at 0541145310.`;
+                const statusEmoji = (o.status === 'completed' || o.status === 'Completed') ? 'Success' : (o.status === 'failed' ? 'Failed' : 'Processing');
+                return `*ORDER STATUS REPORT*\n━━━━━━━━━━━━━━━━━━━━━\nOrder ID: \`#${o.id}\`\nNetwork: ${o.network || 'Data'}\nRecipient: \`${o.recipient_phone || 'N/A'}\`\nBundle: ${o.gb_amount || '1'} GB\nDelivery Status: *${(o.status || 'processing').toUpperCase()}*\nGateway Message: ${o.message || 'Dispatched via Gateway'}\nDate Placed: ${o.created_at || 'Recently'}\n━━━━━━━━━━━━━━━━━━━━━\nNeed help? Contact support at 0541145310.`;
             } else {
-                return `❌ *Order Not Found*\n━━━━━━━━━━━━━━━━━━━━━\nNo order record matched: \`${raw}\`.\n\nPlease check your Order ID or phone number and try again.\n(Reply *menu* to return to the main menu)`;
+                return `*Order Not Found*\n━━━━━━━━━━━━━━━━━━━━━\nNo order record matched: \`${raw}\`.\n\nPlease check your Order ID or phone number and try again.\n(Reply *menu* to return to the main menu)`;
             }
+        }
+
+        // Step 5: Verify Payment Session
+        if (session.step === 'verify_payment_ref') {
+            customerSessions.delete(phone);
+            const cleanRef = raw.replace(/[^a-zA-Z0-9_\-]/g, '');
+            if (cleanRef.length < 4) {
+                return `*Invalid Reference Number*\n\nPlease enter a valid Paystack Reference or MoMo Transaction ID (e.g. \`T1234567890\`, \`APX-1725894123\`, or \`24892019482\`).\n\n(Reply *menu* to return to the main menu)`;
+            }
+
+            // 1. Try website API
+            const verifyApiRes = await callWebsiteApi({
+                op: 'verify_payment',
+                reference: cleanRef,
+                phone: phone,
+                name: name
+            });
+            if (verifyApiRes && verifyApiRes.success && verifyApiRes.reply) {
+                return verifyApiRes.reply;
+            }
+
+            // 2. Fallback to PHP CLI bridge
+            return new Promise((resolve) => {
+                if (!fs.existsSync(BRIDGE_SCRIPT)) {
+                    return resolve(`*Verification Error*\nUnable to connect to verification gateway. Please try again or contact support at 0541145310.`);
+                }
+                execFile('php', [BRIDGE_SCRIPT, phone, `verify ${cleanRef}`, name || 'Customer'], { timeout: 15000 }, (error, stdout) => {
+                    if (error || !stdout) {
+                        return resolve(`*Verification Error*\nUnable to process verification right now. Please try again shortly or contact support.`);
+                    }
+                    try {
+                        const res = JSON.parse(stdout.trim());
+                        if (res && res.reply) return resolve(res.reply);
+                    } catch (e) {}
+                    resolve(`*Verification Complete*\nTransaction was submitted for verification. Reply *balance* to check your updated wallet balance.`);
+                });
+            });
         }
 
         // ── WAEC RESULT CHECKER INTERACTIVE STEPS ──
@@ -279,7 +316,7 @@ async function handleCustomerInteractiveSession(phone, text, name) {
                 examType = 'B.E.C.E. (Private)';
                 typeCode = '09';
             } else {
-                return `⚠️ *Invalid Selection*\n\nPlease reply with a number from *1 to 4*:\n1️⃣ *WASSCE* (School)\n2️⃣ *BECE* (School)\n3️⃣ *WASSCE* (Private / NovDec)\n4️⃣ *BECE* (Private)\n\n_(Reply *cancel* to abort)_`;
+                return `*Invalid Selection*\n\nPlease reply with a number from *1 to 4*:\n1. *WASSCE* (School)\n2. *BECE* (School)\n3. *WASSCE* (Private / NovDec)\n4. *BECE* (Private)\n\n_(Reply *cancel* to abort)_`;
             }
 
             session.data.exam_type = examType;
@@ -287,21 +324,21 @@ async function handleCustomerInteractiveSession(phone, text, name) {
             session.step = 'waec_index';
             session.timestamp = now;
 
-            return `Selected: *${examType}* ✅\n\n📝 *Step 2 of 4: Candidate Index Number*\nPlease enter your *10-Digit WAEC Candidate Index Number*:\n_(e.g. \`0010101001\`)_\n\n_(Reply *cancel* to abort)_`;
+            return `Selected: *${examType}*\n\n*Step 2 of 4: Candidate Index Number*\nPlease enter your *10-Digit WAEC Candidate Index Number*:\n_(e.g. \`0010101001\`)_\n\n_(Reply *cancel* to abort)_`;
         }
 
         // WAEC Step 2: Index Number
         if (session.step === 'waec_index') {
             const cleanIndex = raw.replace(/\D/g, '');
             if (cleanIndex.length !== 10) {
-                return `⚠️ *Invalid Index Number!*\n\nWAEC Index Numbers must be exactly *10 digits* (e.g. \`0010101001\`).\nYou entered: \`${raw}\` (${cleanIndex.length} digits).\n\nPlease enter a valid 10-digit Index Number:\n_(Or reply *cancel* to abort)_`;
+                return `*Invalid Index Number!*\n\nWAEC Index Numbers must be exactly *10 digits* (e.g. \`0010101001\`).\nYou entered: \`${raw}\` (${cleanIndex.length} digits).\n\nPlease enter a valid 10-digit Index Number:\n_(Or reply *cancel* to abort)_`;
             }
 
             session.data.index_number = cleanIndex;
             session.step = 'waec_year';
             session.timestamp = now;
 
-            return `Index Number: \`${cleanIndex}\` ✅\n\n📅 *Step 3 of 4: Examination Year*\nPlease enter your *4-Digit Exam Year*:\n_(e.g. \`2024\`, \`2023\`, \`2022\`)_\n\n_(Reply *cancel* to abort)_`;
+            return `Index Number: \`${cleanIndex}\` ✅\n\n*Step 3 of 4: Examination Year*\nPlease enter your *4-Digit Exam Year*:\n_(e.g. \`2024\`, \`2023\`, \`2022\`)_\n\n_(Reply *cancel* to abort)_`;
         }
 
         // WAEC Step 3: Exam Year
@@ -310,14 +347,14 @@ async function handleCustomerInteractiveSession(phone, text, name) {
             const currentYear = new Date().getFullYear();
             const yearNum = parseInt(cleanYear, 10);
             if (cleanYear.length !== 4 || isNaN(yearNum) || yearNum < 1995 || yearNum > (currentYear + 1)) {
-                return `⚠️ *Invalid Examination Year!*\n\nPlease enter a valid 4-digit exam year (e.g. \`2024\` or \`2023\`):\n_(Or reply *cancel* to abort)_`;
+                return `*Invalid Examination Year!*\n\nPlease enter a valid 4-digit exam year (e.g. \`2024\` or \`2023\`):\n_(Or reply *cancel* to abort)_`;
             }
 
             session.data.year = cleanYear;
             session.step = 'waec_pin_serial';
             session.timestamp = now;
 
-            return `Exam Year: *${cleanYear}* ✅\n\n🔐 *Step 4 of 4: Card Serial Number & PIN*\n━━━━━━━━━━━━━━━━━━━━━\nPlease paste your card details in any format:\n• \`WSC12345678 123456789012\`\n• \`Serial: WSC12345678, PIN: 123456789012\`\n\n🤖 *Our bot will connect directly to WAEC servers and display your full result slip!* \n\n💳 *Need a card?* Buy at: https://apexprime.club/digital_store\n_(Reply *cancel* to abort)_`;
+            return `Exam Year: *${cleanYear}*\n\n*Step 4 of 4: Card Serial Number & PIN*\n━━━━━━━━━━━━━━━━━━━━━\nPlease paste your card details in any format:\n• \`WSC12345678 123456789012\`\n• \`Serial: WSC12345678, PIN: 123456789012\`\n\nOur system connects directly to WAEC servers to display your full result slip. \n\nNeed a card? Buy at: https://apexprime.club/digital_store\n_(Reply *cancel* to abort)_`;
         }
 
         // WAEC Step 4: Card Serial & PIN
@@ -350,7 +387,7 @@ async function handleCustomerInteractiveSession(phone, text, name) {
                     session.timestamp = now;
                     return `Card PIN: \`${pin}\` ✅\n\nPlease now enter your *Card Serial Number* (e.g. \`WSC12345678\`):\n_(Reply *cancel* to abort)_`;
                 }
-                return `⚠️ *Card Serial & PIN Required*\n\nPlease paste both your Card Serial Number and PIN:\n• Example: \`WSC12345678 123456789012\`\n\n_(Reply *cancel* to abort)_`;
+                return `*Card Serial & PIN Required*\n\nPlease paste both your Card Serial Number and PIN:\n• Example: \`WSC12345678 123456789012\`\n\n_(Reply *cancel* to abort)_`;
             }
 
             customerSessions.delete(phone);
@@ -374,7 +411,7 @@ async function handleCustomerInteractiveSession(phone, text, name) {
     // 1. Trigger "1" / "place order" / "buy"
     if (lower === '1' || lower === '1.' || ['place order', 'order', 'buy', 'buy bundle', 'buy data', 'packages', 'bundle', 'data'].includes(lower)) {
         customerSessions.set(phone, { step: 'order_user_code', data: {}, timestamp: now });
-        return `🛒 *Apex Prime Tech — Place Order* 🛒\n━━━━━━━━━━━━━━━━━━━━━\nPlease enter your *User Code* (e.g. \`317\` or \`APEX-317\`):\n\n💡 *Don't have an account or User Code?*\nOrder directly via our instant link:\n👉 https://payroute.name/mr-nipah\n\n_(Reply *cancel* anytime to abort)_`;
+        return `*Apex Prime Tech — Place Order*\n━━━━━━━━━━━━━━━━━━━━━\nPlease enter your *User Code* (e.g. \`317\` or \`APEX-317\`):\n\n*Don't have an account or User Code?*\nOrder directly via our instant link:\nhttps://payroute.name/mr-nipah\n\n_(Reply *cancel* anytime to abort)_`;
     }
 
     // Direct 1-line WAEC check command (e.g. "check wassce 0010101001 2024 WSC12345678 123456789012")
@@ -388,13 +425,13 @@ async function handleCustomerInteractiveSession(phone, text, name) {
     // 2. Trigger "2" / "check result" / "waec" / "wassce" / "bece" (Starts Interactive Online Check)
     if (lower === '2' || lower === '2.' || ['check result', 'result', 'results', 'waec', 'wassce', 'bece', 'checker', 'result checker'].includes(lower)) {
         customerSessions.set(phone, { step: 'waec_exam_type', data: {}, timestamp: now });
-        return `🎓 *Check Result — WAEC Online Portal* 🎓\n━━━━━━━━━━━━━━━━━━━━━\nPlease select your examination by replying with a number (*1 - 4*):\n\n1️⃣ *WASSCE* (School)\n2️⃣ *BECE* (School)\n3️⃣ *WASSCE* (Private / NovDec)\n4️⃣ *BECE* (Private)\n\n💳 *Need a Result Checker Card?*\nBuy cards instantly with automated delivery at:\n👉 https://apexprime.club/digital_store\n\n_(Reply with *1 - 4*, or reply *cancel* to exit)_`;
+        return `*Check Result — WAEC Online Portal*\n━━━━━━━━━━━━━━━━━━━━━\nPlease select your examination by replying with a number (*1 - 4*):\n\n1. *WASSCE* (School)\n2. *BECE* (School)\n3. *WASSCE* (Private / NovDec)\n4. *BECE* (Private)\n\n*Need a Result Checker Card?*\nBuy cards instantly with automated delivery at:\nhttps://apexprime.club/digital_store\n\n_(Reply with *1 - 4*, or reply *cancel* to exit)_`;
     }
 
     // 3. Trigger "3" / "check status" / "track" / "status"
     if (lower === '3' || lower === '3.' || ['check status', 'status', 'track', 'track order', 'order status'].includes(lower)) {
         customerSessions.set(phone, { step: 'check_status_query', data: {}, timestamp: now });
-        return `📦 *Track Order Status — Apex Prime Tech*\n━━━━━━━━━━━━━━━━━━━━━\nPlease enter your *Order ID* (e.g. \`16523\`) or *Recipient Phone Number* to check status:\n\n_(Reply *cancel* to abort)_`;
+        return `*Track Order Status — Apex Prime Tech*\n━━━━━━━━━━━━━━━━━━━━━\nPlease enter your *Order ID* (e.g. \`16523\`) or *Recipient Phone Number* to check status:\n\n_(Reply *cancel* to abort)_`;
     }
 
     // Quick 1-line status check e.g. "status 16523" or "status 0541145310"
@@ -404,20 +441,42 @@ async function handleCustomerInteractiveSession(phone, text, name) {
         if (statusRes && statusRes.success && statusRes.order) {
             const o = statusRes.order;
             const statusEmoji = (o.status === 'completed' || o.status === 'Completed') ? '✅' : (o.status === 'failed' ? '❌' : '⏳');
-            return `📦 *ORDER STATUS REPORT* 📦\n━━━━━━━━━━━━━━━━━━━━━\n🔢 *Order ID*: \`#${o.id}\`\n📱 *Network*: ${o.network || 'Data'}\n👤 *Recipient*: \`${o.recipient_phone || 'N/A'}\`\n📊 *Bundle*: ${o.gb_amount || '1'} GB\n${statusEmoji} *Delivery Status*: *${(o.status || 'processing').toUpperCase()}*\n📝 *Gateway Message*: ${o.message || 'Dispatched via Gateway'}\n📅 *Date Placed*: ${o.created_at || 'Recently'}\n━━━━━━━━━━━━━━━━━━━━━`;
+            return `*ORDER STATUS REPORT*\n━━━━━━━━━━━━━━━━━━━━━\nOrder ID: \`#${o.id}\`\nNetwork: ${o.network || 'Data'}\nRecipient: \`${o.recipient_phone || 'N/A'}\`\nBundle: ${o.gb_amount || '1'} GB\nDelivery Status: *${(o.status || 'processing').toUpperCase()}*\nGateway Message: ${o.message || 'Dispatched via Gateway'}\nDate Placed: ${o.created_at || 'Recently'}\n━━━━━━━━━━━━━━━━━━━━━`;
         } else {
-            return `❌ No order found matching \`${query}\`. Please verify your Order ID or phone number.`;
+            return `No order found matching \`${query}\`. Please verify your Order ID or phone number.`;
+        }
+    }
+
+    // Direct 1-line verify command (e.g. "verify APX-1725894123" or "verify 24892019482")
+    if (lower.startsWith('verify ') || lower.startsWith('verify:')) {
+        const cleanRef = raw.replace(/^verify[:\s]+/i, '').trim().replace(/[^a-zA-Z0-9_\-]/g, '');
+        if (cleanRef.length >= 4) {
+            customerSessions.delete(phone);
+            const verifyApiRes = await callWebsiteApi({ op: 'verify_payment', reference: cleanRef, phone, name });
+            if (verifyApiRes && verifyApiRes.success && verifyApiRes.reply) return verifyApiRes.reply;
+            return new Promise((resolve) => {
+                if (!fs.existsSync(BRIDGE_SCRIPT)) return resolve(`*Verification Error*\nUnable to connect to verification gateway. Please try again or contact support at 0541145310.`);
+                execFile('php', [BRIDGE_SCRIPT, phone, `verify ${cleanRef}`, name || 'Customer'], { timeout: 15000 }, (error, stdout) => {
+                    if (error || !stdout) return resolve(`*Verification Error*\nUnable to process verification right now. Please try again shortly or contact support.`);
+                    try {
+                        const res = JSON.parse(stdout.trim());
+                        if (res && res.reply) return resolve(res.reply);
+                    } catch (e) {}
+                    resolve(`*Verification Complete*\nTransaction was submitted for verification. Reply *balance* to check your updated wallet balance.`);
+                });
+            });
         }
     }
 
     // 4. Trigger "4" / "verify payment"
-    if (lower === '4' || lower === '4.' || ['verify payment', 'verify', 'payment', 'paid'].includes(lower)) {
-        return `🔍 *Verify Payment — Apex Prime Tech*\n━━━━━━━━━━━━━━━━━━━━━\nTo verify your payment reference or MoMo Transaction ID:\n👉 Reply *verify <reference>*\n\nExample: \`verify APX-1725894123\`\n\nOur system will confirm with the payment gateway and update your order or wallet immediately!`;
+    if (lower === '4' || lower === '4.' || ['verify payment', 'verify', 'payment', 'paid', 'check payment'].includes(lower)) {
+        customerSessions.set(phone, { step: 'verify_payment_ref', data: {}, timestamp: now });
+        return `*Payment Verification — Apex Prime Tech*\n━━━━━━━━━━━━━━━━━━━━━\nTo verify your payment and update your wallet or order:\n\nPlease reply with your *Paystack Reference* or *MoMo Transaction ID*:\n• Example Paystack: \`T1234567890\` or \`APX-1725894123\`\n• Example MoMo ID: \`24892019482\`\n\n_(Reply *cancel* anytime to abort)_`;
     }
 
     // 5. Trigger "5" / "talk to an agent" / "agent" / "support"
     if (lower === '5' || lower === '5.' || ['talk to an agent', 'talk to agent', 'agent', 'support', 'human'].includes(lower)) {
-        return `📞 *Talk to an Agent — Apex Prime Tech*\n━━━━━━━━━━━━━━━━━━━━━\nOur customer support team is here to assist you 24/7!\n\n📱 Phone / WhatsApp: *0541145310*\n💬 Direct WhatsApp: https://wa.me/233541145310\n🌐 Website: https://apexprime.club\n\nPlease send your message or question right here, and an agent will attend to you shortly!`;
+        return `*Talk to an Agent — Apex Prime Tech*\n━━━━━━━━━━━━━━━━━━━━━\nOur customer support team is here to assist you 24/7!\n\nPhone / WhatsApp: *0541145310*\nDirect WhatsApp: https://wa.me/233541145310\nWebsite: https://apexprime.club\n\nPlease send your message or question right here, and an agent will attend to you shortly!`;
     }
 
     // 6. Trigger "balance" / "wallet"
@@ -425,9 +484,9 @@ async function handleCustomerInteractiveSession(phone, text, name) {
         const userRes = await callWebsiteApi({ op: 'lookup_user', search: phone });
         if (userRes && userRes.success && userRes.user) {
             const u = userRes.user;
-            return `💰 *Apex Prime Wallet Balance*\n━━━━━━━━━━━━━━━━━━━━━\n👤 User: *${u.username}* (\`APEX-${u.id}\`)\n📱 Phone: \`${u.phone}\`\n💵 Balance: *GHS ${parseFloat(u.wallet_balance || 0).toFixed(2)}*\n🏷️ Tier: *${(u.role || 'client').toUpperCase()}*\n━━━━━━━━━━━━━━━━━━━━━\nTop up your wallet anytime at: https://apexprime.club/topup`;
+            return `*Apex Prime Wallet Balance*\n━━━━━━━━━━━━━━━━━━━━━\nUser: *${u.username}* (\`APEX-${u.id}\`)\n📱 Phone: \`${u.phone}\`\nBalance: *GHS ${parseFloat(u.wallet_balance || 0).toFixed(2)}*\nTier: *${(u.role || 'client').toUpperCase()}*\n━━━━━━━━━━━━━━━━━━━━━\nTop up your wallet anytime at: https://apexprime.club/topup`;
         } else {
-            return `💰 *Apex Prime Wallet Balance*\n━━━━━━━━━━━━━━━━━━━━━\nPlease enter your *User Code* (e.g. \`317\` or \`APEX-317\`) to check your balance, or login at:\n👉 https://apexprime.club/login`;
+            return `*Apex Prime Wallet Balance*\n━━━━━━━━━━━━━━━━━━━━━\nPlease enter your *User Code* (e.g. \`317\` or \`APEX-317\`) to check your balance, or login at:\nhttps://apexprime.club/login`;
         }
     }
 
@@ -442,7 +501,7 @@ async function handleCustomerInteractiveSession(phone, text, name) {
                 data: { user_id: u.id, username: u.username, wallet_balance: bal, role: u.role || 'client' },
                 timestamp: now
             });
-            return `👤 *User Verified*: *${u.username}* (\`APEX-${u.id}\`)\n🏷️ *Tier*: *${(u.role || 'client').toUpperCase()}*\n💰 *Wallet Balance*: *GHS ${bal.toFixed(2)}*\n━━━━━━━━━━━━━━━━━━━━━\nPlease choose an option:\n1️⃣ *MTN Data Bundles*\n2️⃣ *Telecel Data Bundles*\n3️⃣ *AT / AirtelTigo Ishare*\n4️⃣ *MTN AFA Registration*\n\n_(Reply *cancel* anytime to abort)_`;
+            return `*User Verified*: *${u.username}* (\`APEX-${u.id}\`)\n*Tier*: *${(u.role || 'client').toUpperCase()}*\n*Wallet Balance*: *GHS ${bal.toFixed(2)}*\n━━━━━━━━━━━━━━━━━━━━━\nPlease choose an option:\n1. *MTN Data Bundles*\n2. *Telecel Data Bundles*\n3. *AT / AirtelTigo Ishare*\n4. *MTN AFA Registration*\n\n_(Reply *cancel* anytime to abort)_`;
         }
     }
 
@@ -502,7 +561,7 @@ function loadCommandsConfig() {
     return {
         bot_enabled: true,
         fallback_enabled: true,
-        fallback_message: "🤖 Hello {name}! Welcome to Apex Prime.\nType *menu* to see available commands.",
+        fallback_message: "Hello {name}! Welcome to Apex Prime.\nType *menu* to see available commands.",
         ignored_numbers: [],
         userbot_settings: {
             autoview: false,
