@@ -6,6 +6,13 @@
  * Connects to your WhatsApp account by scanning a QR code once.
  */
 
+process.on('uncaughtException', (err) => {
+    console.error('[Uncaught Exception]:', err?.message || err);
+});
+process.on('unhandledRejection', (reason) => {
+    console.error('[Unhandled Rejection]:', reason?.message || reason);
+});
+
 let makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, downloadContentFromMessage, proto, Browsers;
 
 async function loadBaileys() {
@@ -71,6 +78,11 @@ let currentBaileysSocket = null;
 let activePairingCode = null;
 let activePairingPhone = null;
 let pairingTimestamp = 0;
+
+// Used to trigger pairing code mode on next QR event (event-driven pairing flow)
+let pendingPairingPhone = null;
+let pendingPairingResolve = null;
+let pendingPairingReject = null;
 
 const PAIRING_REQ_FILE = path.resolve(__dirname, 'pairing_request.json');
 const PAIRING_STATE_FILE = path.resolve(__dirname, 'pairing_state.json');
@@ -159,7 +171,13 @@ function fetchBuffer(url, options = {}) {
 }
 
 /**
- * Request Baileys Pairing Code for phone number
+ * Request Baileys Pairing Code for phone number.
+ * 
+ * Baileys pairing code flow:
+ * 1. Start a fresh socket with empty credentials
+ * 2. When WhatsApp sends the first QR event, call requestPairingCode(phone) INSTEAD of showing QR
+ * 3. WhatsApp returns an 8-char pairing code valid for 2 minutes
+ * 4. The socket must stay alive while the user enters the code on their phone
  */
 async function generatePairingCode(phoneNumber) {
     if (!phoneNumber) return null;
@@ -174,49 +192,75 @@ async function generatePairingCode(phoneNumber) {
         cleanPhone = '233' + cleanPhone;
     }
 
-    // Wait up to 10 seconds for WhatsApp bot socket to be ready
-    for (let wait = 0; wait < 20; wait++) {
-        if (currentBaileysSocket) break;
-        await new Promise(r => setTimeout(r, 500));
-    }
+    console.log(`[Pairing Code] Preparing fresh session for +${cleanPhone}...`);
 
-    if (!currentBaileysSocket) {
-        throw new Error('WhatsApp bot socket is initializing. Please try again in 5 seconds.');
+    // Cancel any previous pairing attempt in progress
+    if (pendingPairingReject) {
+        try { pendingPairingReject(new Error('Superseded by new pairing request')); } catch (e) {}
     }
+    pendingPairingPhone = null;
+    pendingPairingResolve = null;
+    pendingPairingReject = null;
 
-    if (currentBaileysSocket.authState?.creds?.registered) {
-        throw new Error('Bot is already connected to an account. Disconnect first to link a new number.');
-    }
-
-    console.log(`[Pairing Code] Requesting pairing code for +${cleanPhone}...`);
+    // Kill current socket
     try {
-        const code = await currentBaileysSocket.requestPairingCode(cleanPhone);
-        let formattedCode = String(code).trim();
-        // Baileys pairing code is usually 8 chars. Format as ABCD-1234 if 8 chars and no hyphen
-        if (formattedCode.length === 8 && !formattedCode.includes('-')) {
-            formattedCode = formattedCode.slice(0, 4) + '-' + formattedCode.slice(4);
+        if (currentBaileysSocket) {
+            currentBaileysSocket.ev.removeAllListeners();
+            try { currentBaileysSocket.ws?.terminate(); } catch (e) {}
+            currentBaileysSocket = null;
         }
+    } catch (e) {}
 
-        activePairingCode = formattedCode;
-        activePairingPhone = cleanPhone;
-        pairingTimestamp = Date.now();
+    // Clear stale credentials — a FRESH session is REQUIRED for pairing
+    try {
+        fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+        fs.mkdirSync(AUTH_DIR, { recursive: true });
+    } catch (e) {}
 
-        // Write to pairing_state.json for synchronous PHP bridge reads
-        fs.writeFileSync(PAIRING_STATE_FILE, JSON.stringify({
-            success: true,
-            pairing_code: formattedCode,
-            phone: cleanPhone,
-            timestamp: pairingTimestamp,
-            expires_at: pairingTimestamp + (120 * 1000)
-        }, null, 2));
+    // Clear previous pairing state files
+    try {
+        if (fs.existsSync(PAIRING_STATE_FILE)) fs.unlinkSync(PAIRING_STATE_FILE);
+    } catch (e) {}
 
-        console.log(`[Pairing Code] Successfully generated for +${cleanPhone}: ${formattedCode}`);
+    // Create a Promise that will resolve when the QR event fires and requestPairingCode succeeds
+    const codePromise = new Promise((resolve, reject) => {
+        pendingPairingPhone = cleanPhone;
+        pendingPairingResolve = resolve;
+        pendingPairingReject = reject;
+    });
+
+    // Set a 30-second timeout for the whole process
+    const timeoutHandle = setTimeout(() => {
+        if (pendingPairingReject) {
+            pendingPairingReject(new Error('Timeout waiting for WhatsApp pairing code. Please try again.'));
+            pendingPairingPhone = null;
+            pendingPairingResolve = null;
+            pendingPairingReject = null;
+        }
+    }, 30000);
+
+    // Start a fresh bot session — connection.update handler will pick up pendingPairingPhone
+    console.log(`[Pairing Code] Starting fresh WhatsApp socket for +${cleanPhone}...`);
+    startBot().catch(e => {
+        clearTimeout(timeoutHandle);
+        if (pendingPairingReject) {
+            pendingPairingReject(e);
+            pendingPairingPhone = null;
+            pendingPairingResolve = null;
+            pendingPairingReject = null;
+        }
+    });
+
+    try {
+        const formattedCode = await codePromise;
+        clearTimeout(timeoutHandle);
         return formattedCode;
     } catch (err) {
-        console.error(`[Pairing Code Error]:`, err.message);
+        clearTimeout(timeoutHandle);
         throw err;
     }
 }
+
 
 /**
  * Check file bridge for pending pairing requests from web PHP backend
@@ -1459,6 +1503,15 @@ async function startBot() {
         fs.mkdirSync(AUTH_DIR, { recursive: true });
     }
 
+    // Clean up any previously existing socket before creating a new one
+    if (currentBaileysSocket) {
+        try {
+            currentBaileysSocket.ev.removeAllListeners();
+            currentBaileysSocket.ws?.terminate();
+        } catch (e) {}
+        currentBaileysSocket = null;
+    }
+
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
     const { version, isLatest } = await fetchLatestBaileysVersion();
     console.log(`[WhatsApp] Using Baileys version ${version.join('.')} (isLatest: ${isLatest})`);
@@ -1485,37 +1538,91 @@ async function startBot() {
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
-            botStatus = 'scan_qr';
-            console.log('\n-----------------------------------------------------');
-            console.log(' SCAN THE QR CODE BELOW WITH YOUR WHATSAPP TO CONNECT:');
-            console.log(' 1. Open WhatsApp on your phone');
-            console.log(' 2. Go to Linked Devices > Link a Device');
-            console.log(' 3. Point your camera at this QR code:');
-            console.log('-----------------------------------------------------\n');
-            qrcode.generate(qr, { small: true });
+            // If a pairing code was requested (event-driven flow), intercept the QR event
+            // and call requestPairingCode() HERE — this is the correct Baileys timing.
+            if (pendingPairingPhone && pendingPairingResolve) {
+                const phoneForPairing = pendingPairingPhone;
+                const resolveCode = pendingPairingResolve;
+                const rejectCode = pendingPairingReject;
+                // Clear pending so we don't call again on subsequent QR refreshes
+                pendingPairingPhone = null;
+                pendingPairingResolve = null;
+                pendingPairingReject = null;
 
-            try {
-                QRCodeImage.toFile(path.resolve(__dirname, 'qr.png'), qr, { scale: 8 });
-                QRCodeImage.toDataURL(qr, (err, url) => {
-                    if (!err && url) currentQrDataUrl = url;
+                console.log(`[Pairing Code] QR event intercepted. Requesting pairing code for +${phoneForPairing}...`);
+                sock.requestPairingCode(phoneForPairing).then(code => {
+                    let formattedCode = String(code).trim();
+                    if (formattedCode.length === 8 && !formattedCode.includes('-')) {
+                        formattedCode = formattedCode.slice(0, 4) + '-' + formattedCode.slice(4);
+                    }
+                    activePairingCode = formattedCode;
+                    activePairingPhone = phoneForPairing;
+                    pairingTimestamp = Date.now();
+
+                    try {
+                        fs.writeFileSync(PAIRING_STATE_FILE, JSON.stringify({
+                            success: true,
+                            pairing_code: formattedCode,
+                            phone: phoneForPairing,
+                            timestamp: pairingTimestamp,
+                            expires_at: pairingTimestamp + (120 * 1000)
+                        }, null, 2));
+                    } catch (e) {}
+
+                    console.log(`[Pairing Code] ✅ Successfully generated for +${phoneForPairing}: ${formattedCode}`);
+                    resolveCode(formattedCode);
+                }).catch(err => {
+                    console.error(`[Pairing Code] ❌ Error for +${phoneForPairing}:`, err.message);
+                    rejectCode(err);
                 });
-            } catch (err) {}
+                return; // Don't show QR when pairing code is being used
+            }
+
+            // Normal QR flow (no pairing code requested)
+            if (!activePairingCode) {
+                botStatus = 'scan_qr';
+                console.log('\n-----------------------------------------------------');
+                console.log(' SCAN THE QR CODE BELOW WITH YOUR WHATSAPP TO CONNECT:');
+                console.log(' 1. Open WhatsApp on your phone');
+                console.log(' 2. Go to Linked Devices > Link a Device');
+                console.log(' 3. Point your camera at this QR code:');
+                console.log('-----------------------------------------------------\n');
+                try {
+                    qrcode.generate(qr, { small: true });
+                } catch (e) {}
+
+                try {
+                    QRCodeImage.toFile(path.resolve(__dirname, 'qr.png'), qr, { scale: 8 });
+                    QRCodeImage.toDataURL(qr, (err, url) => {
+                        if (!err && url) currentQrDataUrl = url;
+                    });
+                } catch (err) {}
+            }
         }
 
         if (connection === 'close') {
             botStatus = 'reconnecting';
             const statusCode = (lastDisconnect?.error)?.output?.statusCode;
-            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+            const isRegistered = Boolean(state.creds?.registered);
 
-            console.log(`[WhatsApp] Connection closed. Status code: ${statusCode}. Reconnecting: ${shouldReconnect}`);
+            console.log(`[WhatsApp] Connection closed. Status code: ${statusCode}. registered: ${isRegistered}`);
 
-            if (shouldReconnect) {
-                const retryDelay = statusCode === 440 ? 5000 : 3000;
-                setTimeout(() => {
-                    startBot().catch(e => console.error('[Restart Error]:', e.message));
-                }, retryDelay);
-            } else {
-                console.log('[WhatsApp] You have logged out. Automatically clearing "auth_info_baileys" to generate a new QR code...');
+            // Clean up the closed socket completely
+            try {
+                sock.ev.removeAllListeners();
+                sock.ws?.terminate();
+            } catch (e) {}
+            if (currentBaileysSocket === sock) {
+                currentBaileysSocket = null;
+            }
+
+            // Status code 515 = DisconnectReason.restartRequired (standard after pairing handshake)
+            const isRestartRequired = (statusCode === DisconnectReason.restartRequired || statusCode === 515);
+            const isActualLogout = isRegistered && (statusCode === DisconnectReason.loggedOut) && !isRestartRequired;
+            const isStalePairing = !isRegistered && (statusCode === 401 || statusCode === 405);
+
+            if (isActualLogout || isStalePairing) {
+                console.log('[WhatsApp] Clearing auth directory to allow fresh connection...');
                 try {
                     fs.rmSync(AUTH_DIR, { recursive: true, force: true });
                 } catch (e) {}
@@ -1527,6 +1634,11 @@ async function startBot() {
                 setTimeout(() => {
                     startBot().catch(e => console.error('[Restart Error]:', e.message));
                 }, 2000);
+            } else {
+                const retryDelay = isRestartRequired ? 1500 : (statusCode === 440 ? 5000 : 3000);
+                setTimeout(() => {
+                    startBot().catch(e => console.error('[Restart Error]:', e.message));
+                }, retryDelay);
             }
         } else if (connection === 'open') {
             botStatus = 'connected';
@@ -1809,8 +1921,10 @@ async function startBot() {
 // Built-in Web Server for cPanel / Cloud Hosting & Web QR Scanner / Alexa Covert Pairing
 const PORT = process.env.PORT || 3000;
 const server = http.createServer(async (req, res) => {
+    const urlPath = (req.url || '').split('?')[0].replace(/\/+$/, '');
+
     // API endpoint for health check or status
-    if (req.url === '/status' || req.url === '/api/status') {
+    if (urlPath.endsWith('/status') || urlPath.endsWith('/api/status')) {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({
             status: botStatus,
@@ -1821,7 +1935,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     // POST /api/request-pairing-code (Alexa Covert Pairing Endpoint)
-    if (req.url === '/api/request-pairing-code' && req.method === 'POST') {
+    if (urlPath.endsWith('/api/request-pairing-code') && req.method === 'POST') {
         let body = '';
         req.on('data', chunk => body += chunk);
         req.on('end', async () => {
@@ -1834,23 +1948,33 @@ const server = http.createServer(async (req, res) => {
                 }
 
                 const pairingCode = await generatePairingCode(phone);
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                return res.end(JSON.stringify({
+                const respBody = JSON.stringify({
                     success: true,
                     pairing_code: pairingCode,
                     phone,
                     status: 'pairing'
-                }));
+                });
+                res.writeHead(200, {
+                    'Content-Type': 'application/json',
+                    'Content-Length': Buffer.byteLength(respBody),
+                    'Connection': 'close'
+                });
+                return res.end(respBody);
             } catch (err) {
-                res.writeHead(500, { 'Content-Type': 'application/json' });
-                return res.end(JSON.stringify({ success: false, message: err.message }));
+                const errBody = JSON.stringify({ success: false, message: err.message });
+                res.writeHead(500, {
+                    'Content-Type': 'application/json',
+                    'Content-Length': Buffer.byteLength(errBody),
+                    'Connection': 'close'
+                });
+                return res.end(errBody);
             }
         });
         return;
     }
 
     // POST /api/logout (Disconnect current session)
-    if ((req.url === '/api/logout' || req.url === '/api/disconnect') && req.method === 'POST') {
+    if ((urlPath.endsWith('/api/logout') || urlPath.endsWith('/api/disconnect')) && req.method === 'POST') {
         try {
             if (currentBaileysSocket) {
                 await currentBaileysSocket.logout().catch(() => {});
