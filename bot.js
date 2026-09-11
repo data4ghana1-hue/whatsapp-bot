@@ -6,7 +6,7 @@
  * Connects to your WhatsApp account by scanning a QR code once.
  */
 
-let makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, downloadContentFromMessage, proto;
+let makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, downloadContentFromMessage, proto, Browsers;
 
 async function loadBaileys() {
     let baileys;
@@ -25,6 +25,7 @@ async function loadBaileys() {
     fetchLatestBaileysVersion = baileys.fetchLatestBaileysVersion;
     downloadContentFromMessage = baileys.downloadContentFromMessage;
     proto = baileys.proto;
+    Browsers = baileys.Browsers;
 }
 
 const qrcode = require('qrcode-terminal');
@@ -162,9 +163,21 @@ function fetchBuffer(url, options = {}) {
  */
 async function generatePairingCode(phoneNumber) {
     if (!phoneNumber) return null;
-    const cleanPhone = String(phoneNumber).replace(/\D/g, '');
+    let cleanPhone = String(phoneNumber).replace(/\D/g, '');
     if (!cleanPhone || cleanPhone.length < 9) {
         throw new Error('Invalid phone number format');
+    }
+    // Auto-normalize Ghanaian local numbers (e.g. 0559623850 -> 233559623850)
+    if (cleanPhone.startsWith('0')) {
+        cleanPhone = '233' + cleanPhone.substring(1);
+    } else if (cleanPhone.length === 9) {
+        cleanPhone = '233' + cleanPhone;
+    }
+
+    // Wait up to 10 seconds for WhatsApp bot socket to be ready
+    for (let wait = 0; wait < 20; wait++) {
+        if (currentBaileysSocket) break;
+        await new Promise(r => setTimeout(r, 500));
     }
 
     if (!currentBaileysSocket) {
@@ -1455,7 +1468,7 @@ async function startBot() {
         auth: state,
         logger: pino({ level: 'silent' }),
         printQRInTerminal: false,
-        browser: ['Alexa Covert', 'Chrome', '120.0.6099.109'],
+        browser: Browsers ? Browsers.ubuntu('Chrome') : ['Ubuntu', 'Chrome', '22.04.4'],
         syncFullHistory: false,
         connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: 60000,
