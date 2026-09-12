@@ -1,0 +1,508 @@
+<?php
+/**
+ * Alexa Covert — WhatsApp Bot Activation & Management AJAX Handler
+ * 
+ * Handles GHS 2.00 wallet deduction, pairing code generation requests,
+ * live connection status polling, and personal bot feature settings.
+ */
+
+require_once __DIR__ . '/config.php';
+
+if (session_status() === PHP_SESSION_NONE && !headers_sent()) {
+    @session_start();
+}
+
+// Clean output buffer to ensure pure JSON response
+if (ob_get_level()) {
+    ob_clean();
+}
+header('Content-Type: application/json; charset=utf-8');
+
+// Ensure user is logged in
+if (empty($_SESSION['user']) || empty($_SESSION['user']['id'])) {
+    echo json_encode([
+        'success' => false,
+        'code'    => 'AUTH_REQUIRED',
+        'message' => 'Please log in to your account to activate WhatsApp Bot.'
+    ]);
+    exit;
+}
+
+$pdo = db_connect();
+$userId = (int)$_SESSION['user']['id'];
+
+// Ensure user_whatsapp_bots table exists
+try {
+    $pdo->exec("CREATE TABLE IF NOT EXISTS user_whatsapp_bots (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        bot_name VARCHAR(100) DEFAULT 'Alexa Covert',
+        phone_number VARCHAR(30) NOT NULL,
+        pairing_code VARCHAR(20) DEFAULT NULL,
+        status ENUM('pending', 'connected', 'disconnected', 'expired') DEFAULT 'pending',
+        fee_paid DECIMAL(10,2) DEFAULT 2.00,
+        transaction_ref VARCHAR(100) DEFAULT NULL,
+        autoview_status TINYINT(1) DEFAULT 1,
+        autolike_status TINYINT(1) DEFAULT 1,
+        antidelete TINYINT(1) DEFAULT 1,
+        savedviews TINYINT(1) DEFAULT 1,
+        autoreply TINYINT(1) DEFAULT 1,
+        downloader_enabled TINYINT(1) DEFAULT 1,
+        music_enabled TINYINT(1) DEFAULT 1,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        connected_at DATETIME DEFAULT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        KEY idx_user (user_id),
+        KEY idx_phone (phone_number)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+} catch (Throwable $e) {}
+
+$action = trim($_POST['action'] ?? $_GET['action'] ?? '');
+$botDir = __DIR__ . '/whatsapp_qr_bot';
+$pairingReqFile   = $botDir . '/pairing_request.json';
+$pairingStateFile = $botDir . '/pairing_state.json';
+
+// Helper: normalize Ghanaian / international phone to 233...
+function normalizeBotPhone(string $raw): string {
+    $digits = preg_replace('/\D/', '', $raw);
+    if (empty($digits)) return '';
+    if (strpos($digits, '0') === 0) {
+        $digits = '233' . substr($digits, 1);
+    }
+    if (strlen($digits) === 9) {
+        $digits = '233' . $digits;
+    }
+    return $digits;
+}
+
+// ─────────────────────────────────────────────────────────────
+// 1. ACTION: Check Current Status
+// ─────────────────────────────────────────────────────────────
+if ($action === 'get_status') {
+    // 1. Fetch user record from database
+    $stmt = $pdo->prepare("SELECT * FROM user_whatsapp_bots WHERE user_id = ? ORDER BY id DESC LIMIT 1");
+    $stmt->execute([$userId]);
+    $botRecord = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    // 2. Fetch live bot status from Node.js or pairing_state.json
+    $liveStatus = 'offline';
+    $connectedPhone = null;
+    $livePairingCode = null;
+
+    // Check Node HTTP API first
+    $ch = curl_init('http://127.0.0.1:3000/api/status');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => 2,
+        CURLOPT_CONNECTTIMEOUT => 1
+    ]);
+    $nodeRes = curl_exec($ch);
+    curl_close($ch);
+
+    if ($nodeRes) {
+        $nodeData = json_decode($nodeRes, true);
+        if ($nodeData) {
+            $liveStatus = $nodeData['status'] ?? 'offline';
+            $connectedPhone = $nodeData['phone'] ?? null;
+            $livePairingCode = $nodeData['pairing_code'] ?? null;
+        }
+    }
+
+    // Check pairing_state.json file
+    if (file_exists($pairingStateFile)) {
+        $stateRaw = @file_get_contents($pairingStateFile);
+        $stateData = json_decode($stateRaw, true);
+        if ($stateData) {
+            if (!empty($stateData['pairing_code'])) {
+                if (empty($stateData['expires_at']) || ($stateData['expires_at'] / 1000) > time()) {
+                    $livePairingCode = $stateData['pairing_code'];
+                    if ($liveStatus === 'offline' || $liveStatus === 'scan_qr') {
+                        $liveStatus = 'pairing';
+                    }
+                }
+            }
+            if (($stateData['status'] ?? '') === 'connected') {
+                $liveStatus = 'connected';
+                if (!empty($stateData['phone'])) {
+                    $connectedPhone = $stateData['phone'];
+                }
+            }
+        }
+    }
+
+    // If live status is connected, ensure DB record reflects it
+    if ($liveStatus === 'connected' && $botRecord && $botRecord['status'] !== 'connected') {
+        $upd = $pdo->prepare("UPDATE user_whatsapp_bots SET status = 'connected', connected_at = IFNULL(connected_at, NOW()) WHERE id = ?");
+        $upd->execute([$botRecord['id']]);
+        $botRecord['status'] = 'connected';
+    }
+
+    // Refresh wallet balance
+    $balStmt = $pdo->prepare("SELECT wallet_balance FROM users WHERE id = ?");
+    $balStmt->execute([$userId]);
+    $walletBal = (float)($balStmt->fetchColumn() ?: 0.00);
+
+    // Fetch all accounts for multi-account history
+    $allStmt = $pdo->prepare("SELECT * FROM user_whatsapp_bots WHERE user_id = ? ORDER BY id DESC");
+    $allStmt->execute([$userId]);
+    $allRecords = $allStmt->fetchAll(PDO::FETCH_ASSOC);
+
+    echo json_encode([
+        'success'         => true,
+        'wallet_balance'  => $walletBal,
+        'live_status'     => $liveStatus,
+        'connected_phone' => $connectedPhone,
+        'pairing_code'    => $livePairingCode,
+        'record'          => $botRecord ?: null,
+        'records'         => $allRecords ?: []
+    ]);
+    exit;
+}
+
+// ─────────────────────────────────────────────────────────────
+// 2. ACTION: Request Pairing Code (Debits GHS 2.00)
+// ─────────────────────────────────────────────────────────────
+if ($action === 'request_pairing') {
+    @set_time_limit(90);
+    $rawPhone = trim($_POST['phone'] ?? '');
+    $cleanPhone = normalizeBotPhone($rawPhone);
+    $isRefresh = !empty($_POST['is_refresh']);
+
+    if (empty($cleanPhone) || strlen($cleanPhone) < 10) {
+        echo json_encode([
+            'success' => false,
+            'message' => 'Please enter a valid WhatsApp phone number (e.g. 0553381853 or 233553381853).'
+        ]);
+        exit;
+    }
+
+    // Check if user has an existing active pending record in last 15 minutes to avoid double-charge on refresh/retry
+    $existingStmt = $pdo->prepare("SELECT * FROM user_whatsapp_bots WHERE user_id = ? AND phone_number = ? AND status = 'pending' AND created_at >= (NOW() - INTERVAL 15 MINUTE) ORDER BY id DESC LIMIT 1");
+    $existingStmt->execute([$userId, $cleanPhone]);
+    $existingPending = $existingStmt->fetch(PDO::FETCH_ASSOC);
+
+    $activationFee = 2.00;
+    $txRef = 'WABOT-' . time() . '-' . mt_rand(1000, 9999);
+    $botRecordId = null;
+
+    if ($existingPending && $isRefresh) {
+        $botRecordId = (int)$existingPending['id'];
+    } else {
+        // 1. Check current wallet balance
+        $balStmt = $pdo->prepare("SELECT wallet_balance FROM users WHERE id = ?");
+        $balStmt->execute([$userId]);
+        $currentBal = (float)($balStmt->fetchColumn() ?: 0.00);
+
+        if ($currentBal < $activationFee) {
+            echo json_encode([
+                'success'        => false,
+                'code'           => 'INSUFFICIENT_BALANCE',
+                'required'       => $activationFee,
+                'wallet_balance' => $currentBal,
+                'message'        => 'Insufficient wallet balance. You need at least GHS ' . number_format($activationFee, 2) . ' to activate WhatsApp Bot. Please top up your wallet.'
+            ]);
+            exit;
+        }
+
+        // 2. Debit GHS 2.00 via standard wallet transaction
+        $desc = "WhatsApp Bot Activation Fee (+{$cleanPhone})";
+
+        $debited = false;
+        if (function_exists('addWalletTransaction')) {
+            $debited = addWalletTransaction($pdo, $userId, $activationFee, 'debit', $txRef, $desc);
+        } else {
+            $upd = $pdo->prepare("UPDATE users SET wallet_balance = wallet_balance - ? WHERE id = ? AND wallet_balance >= ?");
+            $debited = $upd->execute([$activationFee, $userId, $activationFee]);
+        }
+
+        if (!$debited) {
+            echo json_encode([
+                'success' => false,
+                'message' => 'Unable to process wallet deduction. Please verify your balance and try again.'
+            ]);
+            exit;
+        }
+
+        // 3. Record in user_whatsapp_bots (personal bot defaults to autoreply = 0 so contacts aren't disturbed)
+        $stmt = $pdo->prepare("
+            INSERT INTO user_whatsapp_bots 
+            (user_id, bot_name, phone_number, status, fee_paid, transaction_ref, autoreply, created_at)
+            VALUES (?, 'Alexa Covert', ?, 'pending', ?, ?, 0, NOW())
+        ");
+        $stmt->execute([$userId, $cleanPhone, $activationFee, $txRef]);
+        $botRecordId = (int)$pdo->lastInsertId();
+    }
+
+    // 4. Request pairing code from Node.js Bot Service
+    $pairingCode = null;
+    $postPayload = json_encode(['phone' => $cleanPhone]);
+
+    // Check if Node bot is active on port 3000
+    $botHealthy = false;
+    $chCheck = curl_init('http://127.0.0.1:3000/api/status');
+    curl_setopt_array($chCheck, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => 2,
+        CURLOPT_CONNECTTIMEOUT => 1
+    ]);
+    $statusRes = curl_exec($chCheck);
+    curl_close($chCheck);
+    if ($statusRes && ($statusData = json_decode($statusRes, true))) {
+        $botHealthy = true;
+    } else {
+        // Auto-start Node bot if stopped
+        if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
+            $winCmd = 'cmd /c "cd /d ' . escapeshellarg($botDir) . ' && start \"\" /b node bot.js > bot.log 2>&1"';
+            @pclose(@popen($winCmd, "r"));
+        } else {
+            $nixCmd = 'cd ' . escapeshellarg($botDir) . ' && nohup node bot.js > bot.log 2>&1 &';
+            @exec($nixCmd);
+        }
+        // Poll for up to 5 seconds for bot to spin up
+        for ($s = 0; $s < 10; $s++) {
+            usleep(500000); // 500ms
+            $chCheck = curl_init('http://127.0.0.1:3000/api/status');
+            curl_setopt_array($chCheck, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_TIMEOUT        => 1,
+                CURLOPT_CONNECTTIMEOUT => 1
+            ]);
+            $spinRes = curl_exec($chCheck);
+            curl_close($chCheck);
+            if ($spinRes) {
+                $botHealthy = true;
+                break;
+            }
+        }
+    }
+
+    // A. Direct HTTP request to Node.js bot server (Priority: local port 3000)
+    $pairingEndpoints = [
+        'http://127.0.0.1:3000/api/request-pairing-code'
+    ];
+    if (!empty($_SERVER['HTTP_HOST']) && strpos($_SERVER['HTTP_HOST'], 'localhost') === false && strpos($_SERVER['HTTP_HOST'], '127.0.0.1') === false) {
+        $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https://' : 'http://';
+        $pairingEndpoints[] = $scheme . $_SERVER['HTTP_HOST'] . '/whatsapp_bot/api/request-pairing-code';
+    }
+
+    foreach ($pairingEndpoints as $endpoint) {
+        $ch = curl_init($endpoint);
+        curl_setopt_array($ch, [
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => $postPayload,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => 22,
+            CURLOPT_CONNECTTIMEOUT => 3,
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYHOST => false,
+            CURLOPT_HTTPHEADER     => ['Content-Type: application/json']
+        ]);
+        $nodeApiRes = curl_exec($ch);
+        curl_close($ch);
+
+        if ($nodeApiRes) {
+            $apiJson = json_decode($nodeApiRes, true);
+            if (!empty($apiJson['pairing_code'])) {
+                $pairingCode = $apiJson['pairing_code'];
+                break;
+            }
+        }
+    }
+
+    // B. File Bridge Fallback (writes pairing request to disk and polls up to 25s)
+    if (!$pairingCode) {
+        @file_put_contents($pairingReqFile, json_encode([
+            'phone'             => $cleanPhone,
+            'linked_via'        => 'phone_number',
+            'personal_bot_mode' => true,
+            'user_id'           => $userId,
+            'record_id'         => $botRecordId,
+            'timestamp'         => time()
+        ], JSON_PRETTY_PRINT));
+
+        for ($w = 0; $w < 50; $w++) {
+            usleep(500000); // 500ms * 50 = 25 seconds
+            if (file_exists($pairingStateFile)) {
+                $stData = json_decode(@file_get_contents($pairingStateFile), true);
+                if ($stData && !empty($stData['pairing_code']) && ($stData['phone'] ?? '') === $cleanPhone) {
+                    $pairingCode = $stData['pairing_code'];
+                    break;
+                }
+            }
+        }
+    }
+
+    // C. If still no valid code generated from WhatsApp servers, REFUND user and inform them
+    if (!$pairingCode) {
+        if (!$existingPending || !$isRefresh) {
+            $refundTx = 'REF-' . time() . '-' . mt_rand(1000, 9999);
+            if (function_exists('addWalletTransaction')) {
+                addWalletTransaction($pdo, $userId, $activationFee, 'credit', $refundTx, 'Refund: WhatsApp Linking Code Timeout');
+            } else {
+                $pdo->prepare("UPDATE users SET wallet_balance = wallet_balance + ? WHERE id = ?")->execute([$activationFee, $userId]);
+            }
+        }
+        $pdo->prepare("UPDATE user_whatsapp_bots SET status = 'expired' WHERE id = ?")->execute([$botRecordId]);
+
+        $balStmt = $pdo->prepare("SELECT wallet_balance FROM users WHERE id = ?");
+        $balStmt->execute([$userId]);
+        $refundedBal = (float)($balStmt->fetchColumn() ?: 0.00);
+        if (isset($_SESSION['user'])) {
+            $_SESSION['user']['wallet_balance'] = $refundedBal;
+        }
+
+        echo json_encode([
+            'success'        => false,
+            'code'           => 'PAIRING_TIMEOUT',
+            'wallet_balance' => $refundedBal,
+            'message'        => 'WhatsApp servers took too long to return the linking code. Your GHS 2.00 has been refunded to your wallet. Please tap Generate Linking Code again.'
+        ]);
+        exit;
+    }
+
+    // Format pairing code nicely as ABCD-1234 if needed
+    $cleanCode = str_replace('-', '', trim($pairingCode));
+    if (strlen($cleanCode) === 8) {
+        $pairingCode = substr($cleanCode, 0, 4) . '-' . substr($cleanCode, 4);
+    }
+
+    // Update database record with authentic WhatsApp pairing code
+    $updStmt = $pdo->prepare("UPDATE user_whatsapp_bots SET pairing_code = ? WHERE id = ?");
+    $updStmt->execute([$pairingCode, $botRecordId]);
+
+    // Get updated wallet balance and sync session
+    $balStmt->execute([$userId]);
+    $newBal = (float)($balStmt->fetchColumn() ?: 0.00);
+    if (isset($_SESSION['user'])) {
+        $_SESSION['user']['wallet_balance'] = $newBal;
+    }
+
+    $formattedPhone = '+233 ' . substr($cleanPhone, 3, 2) . ' ' . substr($cleanPhone, 5, 3) . ' ' . substr($cleanPhone, 8);
+
+    echo json_encode([
+        'success'         => true,
+        'pairing_code'    => $pairingCode,
+        'target_phone'    => '+' . $cleanPhone,
+        'formatted_phone' => $formattedPhone,
+        'new_balance'     => $newBal,
+        'tx_ref'          => $txRef,
+        'message'         => 'Pairing code generated successfully! Enter this code on your WhatsApp.'
+    ]);
+    exit;
+}
+
+// ─────────────────────────────────────────────────────────────
+// 3. ACTION: Update Personal Bot Feature Toggles
+// ─────────────────────────────────────────────────────────────
+if ($action === 'update_settings') {
+    $botId      = isset($_POST['bot_id']) ? (int)$_POST['bot_id'] : 0;
+    $autoview   = isset($_POST['autoview']) ? 1 : 0;
+    $autolike   = isset($_POST['autolike']) ? 1 : 0;
+    $antidelete = isset($_POST['antidelete']) ? 1 : 0;
+    $savedviews = isset($_POST['savedviews']) ? 1 : 0;
+    $autoreply  = isset($_POST['autoreply']) ? 1 : 0;
+    $downloader = isset($_POST['downloader_enabled']) ? 1 : 0;
+    $music      = isset($_POST['music_enabled']) ? 1 : 0;
+
+    if ($botId > 0) {
+        $stmt = $pdo->prepare("
+            UPDATE user_whatsapp_bots 
+            SET autoview_status = ?, autolike_status = ?, antidelete = ?, savedviews = ?, 
+                autoreply = ?, downloader_enabled = ?, music_enabled = ?
+            WHERE id = ? AND user_id = ?
+        ");
+        $stmt->execute([$autoview, $autolike, $antidelete, $savedviews, $autoreply, $downloader, $music, $botId, $userId]);
+    } else {
+        $stmt = $pdo->prepare("
+            UPDATE user_whatsapp_bots 
+            SET autoview_status = ?, autolike_status = ?, antidelete = ?, savedviews = ?, 
+                autoreply = ?, downloader_enabled = ?, music_enabled = ?
+            WHERE user_id = ?
+        ");
+        $stmt->execute([$autoview, $autolike, $antidelete, $savedviews, $autoreply, $downloader, $music, $userId]);
+    }
+
+    // Sync to bot_commands.json userbot_settings
+    $cfgFile = __DIR__ . '/bot_commands.json';
+    if (file_exists($cfgFile)) {
+        $cfg = json_decode(@file_get_contents($cfgFile), true) ?: [];
+        $cfg['userbot_settings'] = $cfg['userbot_settings'] ?? [];
+        $cfg['userbot_settings']['autoview'] = (bool)$autoview;
+        $cfg['userbot_settings']['autolike'] = (bool)$autolike;
+        $cfg['userbot_settings']['savedviews'] = (bool)$savedviews;
+        $cfg['userbot_settings']['recoverydeleted'] = (bool)$antidelete;
+        $cfg['userbot_settings']['autoreply'] = (bool)$autoreply;
+        $cfg['userbot_settings']['personal_mode_only'] = ($autoreply === 0);
+        @file_put_contents($cfgFile, json_encode($cfg, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+    }
+
+    // Sync to session_info.json
+    $sessFile = $botDir . '/session_info.json';
+    if (file_exists($sessFile)) {
+        $sData = json_decode(@file_get_contents($sessFile), true) ?: [];
+        $sData['personal_bot_mode'] = ($autoreply === 0);
+        @file_put_contents($sessFile, json_encode($sData, JSON_PRETTY_PRINT));
+    }
+
+    echo json_encode([
+        'success' => true,
+        'message' => 'Alexa Covert settings updated successfully!'
+    ]);
+    exit;
+}
+
+// ─────────────────────────────────────────────────────────────
+// 4. ACTION: Disconnect / Unlink Device
+// ─────────────────────────────────────────────────────────────
+if ($action === 'disconnect') {
+    $botId = isset($_POST['bot_id']) ? (int)$_POST['bot_id'] : 0;
+
+    // Signal bot to disconnect
+    $ch = curl_init('http://127.0.0.1:3000/api/logout');
+    curl_setopt_array($ch, [
+        CURLOPT_POST           => true,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => 3
+    ]);
+    @curl_exec($ch);
+    @curl_close($ch);
+
+    // Clean pairing state files
+    @unlink($pairingReqFile);
+    @unlink($pairingStateFile);
+    $sessFile = $botDir . '/session_info.json';
+    @unlink($sessFile);
+
+    // Update database
+    if ($botId > 0) {
+        $stmt = $pdo->prepare("UPDATE user_whatsapp_bots SET status = 'disconnected' WHERE id = ? AND user_id = ?");
+        $stmt->execute([$botId, $userId]);
+    } else {
+        $stmt = $pdo->prepare("UPDATE user_whatsapp_bots SET status = 'disconnected' WHERE user_id = ?");
+        $stmt->execute([$userId]);
+    }
+
+    echo json_encode([
+        'success' => true,
+        'message' => 'Device unlinked successfully.'
+    ]);
+    exit;
+}
+
+// ─────────────────────────────────────────────────────────────
+// 5. ACTION: Delete / Remove Account from History
+// ─────────────────────────────────────────────────────────────
+if ($action === 'delete_record') {
+    $botId = (int)($_POST['bot_id'] ?? 0);
+    if ($botId > 0) {
+        $del = $pdo->prepare("DELETE FROM user_whatsapp_bots WHERE id = ? AND user_id = ? AND status != 'connected'");
+        $del->execute([$botId, $userId]);
+        echo json_encode(['success' => true, 'message' => 'Account removed from history.']);
+        exit;
+    }
+    echo json_encode(['success' => false, 'message' => 'Unable to remove account.']);
+    exit;
+}
+
+echo json_encode(['success' => false, 'message' => 'Invalid action specified.']);
+exit;
