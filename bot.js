@@ -681,11 +681,11 @@ async function handleCustomerInteractiveSession(phone, text, name) {
 
                 session.step = 'order_select_network';
                 session.timestamp = now;
-                return `*User Verified*: *${user.username}* (\`APEX-${user.id}\`)\n*Tier*: *${role}*\n*Wallet Balance*: *GHS ${bal.toFixed(2)}*\n━━━━━━━━━━━━━━━━━━━━━\nPlease choose an option by replying with a number (*1 - 5*):\n\n1️⃣ *MTN Data Bundles*\n2️⃣ *Telecel Data Bundles*\n3️⃣ *AT / AirtelTigo Ishare*\n4️⃣ *MTN AFA Registration*\n5️⃣ *Result Checker Cards (WASSCE / BECE)*\n\n_(Reply *cancel* anytime to abort)_`;
+                return `*User Verified*: *${user.username}* (\`APEX-${user.id}\`)\n*Tier*: *${role}*\n*Wallet Balance*: *GHS ${bal.toFixed(2)}*\n━━━━━━━━━━━━━━━━━━━━━\nPlease choose an option by replying with a number (*1 - 5*):\n\n1. *MTN Data Bundles*\n2. *Telecel Data Bundles*\n3. *AT / AirtelTigo Ishare*\n4. *MTN AFA Registration*\n5. *Result Checker Cards (WASSCE / BECE)*\n\n_(Reply *cancel* anytime to abort)_`;
             } else if (apiRes && apiRes.success === false) {
                 return `*User Code Not Found*\n━━━━━━━━━━━━━━━━━━━━━\nUser Code \`${raw}\` was not found in our database.\n\n*Don't have an account?*\nOrder directly via our instant link:\nhttps://payroute.name/mr-nipah\n\n_(Or re-enter your valid User Code, or reply *cancel* to abort)_`;
             } else {
-                return `⚠️ *Database Connection Delayed*\n━━━━━━━━━━━━━━━━━━━━━\nUnable to verify User Code \`${raw}\` at this moment.\n\nPlease re-enter your User Code to try again, or order directly via our instant link:\nhttps://payroute.name/mr-nipah\n\n_(Or reply *cancel* to abort)_`;
+                return `*Database Connection Delayed*\n━━━━━━━━━━━━━━━━━━━━━\nUnable to verify User Code \`${raw}\` at this moment.\n\nPlease re-enter your User Code to try again, or order directly via our instant link:\nhttps://payroute.name/mr-nipah\n\n_(Or reply *cancel* to abort)_`;
             }
         }
 
@@ -699,19 +699,19 @@ async function handleCustomerInteractiveSession(phone, text, name) {
             else if (lower === '5' || lower.includes('checker') || lower.includes('result') || lower.includes('card') || lower.includes('voucher')) network = 'CHECKER';
 
             if (!network) {
-                return `*Invalid Option*\nPlease reply with a number from *1 to 5*:\n1️⃣ *MTN Data*\n2️⃣ *Telecel Data*\n3️⃣ *AT Ishare*\n4️⃣ *MTN AFA*\n5️⃣ *Result Checker Cards*\n\n_(Reply *cancel* to abort)_`;
+                return `*Invalid Option*\nPlease reply with a number from *1 to 5*:\n1. *MTN Data*\n2. *Telecel Data*\n3. *AT Ishare*\n4. *MTN AFA*\n5. *Result Checker Cards*\n\n_(Reply *cancel* to abort)_`;
             }
 
             if (network === 'CHECKER') {
                 session.step = 'order_buy_checker';
                 session.timestamp = now;
-                return `*Result Checker — Buy WAEC Cards*\n━━━━━━━━━━━━━━━━━━━━━\nUser: *${session.data.username}* (\`APEX-${session.data.user_id}\`)\nBalance: *GHS ${session.data.wallet_balance.toFixed(2)}*\n━━━━━━━━━━━━━━━━━━━━━\nSelect Result Checker Card to purchase:\n\n1️⃣ *WASSCE Result Checker* — *GHS 20.00*\n2️⃣ *BECE Result Checker* — *GHS 20.00*\n\n*Instant Delivery*: Card PIN & Serial Number will be sent right here immediately!\n\n_(Reply with *1* or *2*, or reply *cancel* to abort)_`;
+                return `*Result Checker — Buy WAEC Cards*\n━━━━━━━━━━━━━━━━━━━━━\nUser: *${session.data.username}* (\`APEX-${session.data.user_id}\`)\nBalance: *GHS ${session.data.wallet_balance.toFixed(2)}*\n━━━━━━━━━━━━━━━━━━━━━\nSelect Result Checker Card to purchase:\n\n1. *WASSCE Result Checker* — *GHS 20.00*\n2. *BECE Result Checker* — *GHS 20.00*\n\n*Instant Delivery*: Card PIN & Serial Number will be sent right here immediately!\n\n_(Reply with *1* or *2*, or reply *cancel* to abort)_`;
             }
 
             if (network === 'AFA') {
                 session.step = 'order_afa_details';
                 session.timestamp = now;
-                return `*MTN AFA Registration (GHS 15.00)*\n━━━━━━━━━━━━━━━━━━━━━\nPlease reply with the registration details in this format:\n👉 \`<Phone> <Full Name> <Ghana Card Number>\`\n\n• Example: \`0541145310 Eric Fosu GHA-123456789-0\`\n\n_(Reply *cancel* to abort)_`;
+                return `*MTN AFA Registration (GHS 15.00)*\n━━━━━━━━━━━━━━━━━━━━━\nPlease reply with the registration details in this format:\n• Example: \`0541145310 Eric Fosu GHA-123456789-0\`\n\n_(Reply *cancel* to abort)_`;
             }
 
             session.data.network = network;
@@ -721,7 +721,7 @@ async function handleCustomerInteractiveSession(phone, text, name) {
             const priceRes = await callWebsiteApi({ op: 'get_price', network, amount: 1, user_id: session.data.user_id, role: session.data.role });
             const rateStr = (priceRes && priceRes.price) ? ` (Rate: *GHS ${parseFloat(priceRes.price).toFixed(2)} / GB*)` : '';
 
-            return `*${network} Data Bundle Order*\n━━━━━━━━━━━━━━━━━━━━━\nUser: *${session.data.username}* (\`APEX-${session.data.user_id}\`)${rateStr}\nBalance: *GHS ${session.data.wallet_balance.toFixed(2)}*\n\nPlease enter the *Recipient Phone Number* and *GB size*:\n👉 Format: \`<phone> <GB>\`\n\n• Example: \`0559623850 2\`\n• Example: \`0241234567 5\`\n\n_(Reply *cancel* to abort)_`;
+            return `*${network} Data Bundle Order*\n━━━━━━━━━━━━━━━━━━━━━\nUser: *${session.data.username}* (\`APEX-${session.data.user_id}\`)${rateStr}\nBalance: *GHS ${session.data.wallet_balance.toFixed(2)}*\n\nPlease enter the *Recipient Phone Number* and *GB size*:\nFormat: \`<phone> <GB>\`\n\n• Example: \`0559623850 2\`\n• Example: \`0241234567 5\`\n\n_(Reply *cancel* to abort)_`;
         }
 
         // Step 2B: Buy Result Checker Cards
@@ -804,10 +804,10 @@ async function handleCustomerInteractiveSession(phone, text, name) {
                         session.data.wallet_balance = bal;
                         session.step = 'order_select_network';
                         session.timestamp = now;
-                        return `*Payment Confirmed!* ✅\nUser: *${u.username}* (\`APEX-${u.id}\`)\nNew Balance: *GHS ${bal.toFixed(2)}*\n━━━━━━━━━━━━━━━━━━━━━\nPlease choose what you want to buy (*1 - 5*):\n1️⃣ *MTN Data Bundles*\n2️⃣ *Telecel Data Bundles*\n3️⃣ *AT / AirtelTigo Ishare*\n4️⃣ *MTN AFA Registration*\n5️⃣ *Result Checker Cards (WASSCE / BECE)*\n\n_(Reply *cancel* anytime to abort)_`;
+                        return `*Payment Confirmed!*\nUser: *${u.username}* (\`APEX-${u.id}\`)\nNew Balance: *GHS ${bal.toFixed(2)}*\n━━━━━━━━━━━━━━━━━━━━━\nPlease choose what you want to buy (*1 - 5*):\n1. *MTN Data Bundles*\n2. *Telecel Data Bundles*\n3. *AT / AirtelTigo Ishare*\n4. *MTN AFA Registration*\n5. *Result Checker Cards (WASSCE / BECE)*\n\n_(Reply *cancel* anytime to abort)_`;
                     }
                 }
-                return `⚠️ *Payment Not Detected Yet for User Code \`APEX-${session.data.user_id || raw}\`*\n━━━━━━━━━━━━━━━━━━━━━\nIf you just sent the money, please wait 30–60 seconds for network delivery.\n\n👉 *Didn't use your User Code as reference?*\nPlease reply with your *MoMo Transaction ID* (e.g. \`24892019482\`) to claim your payment directly!\n\n_(Reply *cancel* anytime to abort)_`;
+                return `*Payment Not Detected Yet for User Code \`APEX-${session.data.user_id || raw}\`*\n━━━━━━━━━━━━━━━━━━━━━\nIf you just sent the money, please wait 30–60 seconds for network delivery.\n\n*Didn't use your User Code as reference?*\nPlease reply with your *MoMo Transaction ID* (e.g. \`24892019482\`) to claim your payment directly!\n\n_(Reply *cancel* anytime to abort)_`;
             }
 
             if (cleanTx.length < 5) {
@@ -825,10 +825,10 @@ async function handleCustomerInteractiveSession(phone, text, name) {
             if (verifyRes && verifyRes.success && !verifyRes.reply?.includes('UNSUCCESSFUL') && !verifyRes.reply?.includes('Unconfirmed')) {
                 session.step = 'order_select_network';
                 session.timestamp = now;
-                return `${verifyRes.reply}\n\n━━━━━━━━━━━━━━━━━━━━━\nPlease choose what you want to buy (*1 - 5*):\n1️⃣ *MTN Data Bundles*\n2️⃣ *Telecel Data Bundles*\n3️⃣ *AT / AirtelTigo Ishare*\n4️⃣ *MTN AFA Registration*\n5️⃣ *Result Checker Cards (WASSCE / BECE)*\n\n_(Reply *cancel* anytime to abort)_`;
+                return `${verifyRes.reply}\n\n━━━━━━━━━━━━━━━━━━━━━\nPlease choose what you want to buy (*1 - 5*):\n1. *MTN Data Bundles*\n2. *Telecel Data Bundles*\n3. *AT / AirtelTigo Ishare*\n4. *MTN AFA Registration*\n5. *Result Checker Cards (WASSCE / BECE)*\n\n_(Reply *cancel* anytime to abort)_`;
             } else {
                 // CLEAR WARNING TO USER IF UNVERIFIED / UNSUCCESSFUL
-                return `⚠️ *PAYMENT NOT VERIFIED / UNSUCCESSFUL*\n━━━━━━━━━━━━━━━━━━━━━\n• Transaction ID: \`${cleanTx}\`\n• Status: *Unconfirmed or Not Found* ❌\n\n⚠️ *Warning*: We could not verify any successful Mobile Money payment with this Transaction ID in our database.\n\n• Please double-check your MoMo confirmation SMS and ensure you entered the exact *Transaction ID* (e.g. \`24892019482\`).\n• If you just completed the payment, please allow 30–60 seconds for network delivery and re-enter your Transaction ID.\n• If you paid with your User Code \`APEX-${session.data.user_id || ''}\` as reference, reply with \`APEX-${session.data.user_id || ''}\` to refresh your balance.\n• Need assistance? Contact our support team at *0553381853*.\n\n_(Reply *cancel* anytime to abort)_`;
+                return `*PAYMENT NOT VERIFIED / UNSUCCESSFUL*\n━━━━━━━━━━━━━━━━━━━━━\n• Transaction ID: \`${cleanTx}\`\n• Status: *Unconfirmed or Not Found*\n\n*Warning*: We could not verify any successful Mobile Money payment with this Transaction ID in our database.\n\n• Please double-check your MoMo confirmation SMS and ensure you entered the exact *Transaction ID* (e.g. \`24892019482\`).\n• If you just completed the payment, please allow 30–60 seconds for network delivery and re-enter your Transaction ID.\n• If you paid with your User Code \`APEX-${session.data.user_id || ''}\` as reference, reply with \`APEX-${session.data.user_id || ''}\` to refresh your balance.\n• Need assistance? Contact our support team at *0553381853*.\n\n_(Reply *cancel* anytime to abort)_`;
             }
         }
 
@@ -836,7 +836,7 @@ async function handleCustomerInteractiveSession(phone, text, name) {
         if (session.step === 'order_enter_bundle') {
             const bundleMatch = raw.match(/(\d{10,12})\s+(\d+(?:\.\d+)?)/);
             if (!bundleMatch) {
-                return `*Invalid Format*\nPlease enter the *recipient phone* and *GB size* separated by a space:\n👉 Example: \`0559623850 2\`\n\n_(Reply *cancel* to abort)_`;
+                return `*Invalid Format*\nPlease enter the *recipient phone* and *GB size* separated by a space:\nExample: \`0559623850 2\`\n\n_(Reply *cancel* to abort)_`;
             }
 
             const recipient = bundleMatch[1];
@@ -1050,7 +1050,7 @@ async function handleCustomerInteractiveSession(phone, text, name) {
     // 1. Trigger "1" / "place order" / "buy"
     if (lower === '1' || lower === '1.' || ['place order', 'order', 'buy', 'buy bundle', 'buy data', 'packages', 'bundle', 'data'].includes(lower)) {
         customerSessions.set(phone, { step: 'order_user_code', data: {}, timestamp: now });
-        return `🛒 *How to Register & Place Order on Apex Prime Tech*\n━━━━━━━━━━━━━━━━━━━━━\nFollow these quick steps to register and purchase data bundles, result checkers, or MTN AFA registrations:\n\n📝 *Step 1: Create an Account (Register)*\n1. Visit our website: https://apexprime.club/register\n2. Fill in your *Username*, *Phone Number*, *Email*, and create a *Password*.\n3. Click *Register* to immediately create your account!\n_(Already have an account? Login at: https://apexprime.club/login)_\n\n💳 *Step 2: Fund Your Wallet*\n1. From your dashboard, tap *Fund Wallet / Top-Up* (or go to: https://apexprime.club/topup).\n2. Pay via *Paystack* (Mobile Money or ATM Card) or direct MoMo.\n3. Your wallet will be credited instantly!\n\n📦 *Step 3: Place Your Order*\n1. Tap *Buy Data Bundle* on your user dashboard.\n2. Select your network (*MTN*, *Telecel*, or *AT Ishare*).\n3. Choose your bundle package size (*1GB, 2GB, 5GB, 10GB*, etc.).\n4. Enter the recipient phone number.\n5. Tap *Buy Now* / *Submit*!\n\n⚡ *Automated Delivery*: Bundles are dispatched and delivered to the recipient line within seconds!\n\n━━━━━━━━━━━━━━━━━━━━━\n🔍 *Quick Shortcuts*:\n• Reply *4* to verify a payment reference & credit your wallet\n• Reply *3* or *status <order_id>* to track order delivery\n• Reply *balance* to check your current wallet balance\n• Or reply with your *User Code* (e.g. \`317\` or \`APEX-317\`) to order directly in chat\n• Reply *menu* to return to the main menu`;
+        return `*How to Register & Place Order on Apex Prime Tech*\n━━━━━━━━━━━━━━━━━━━━━\nFollow these quick steps to register and purchase data bundles, result checkers, or MTN AFA registrations:\n\n*Step 1: Create an Account (Register)*\n1. Visit our website: https://apexprime.club/register\n2. Fill in your *Username*, *Phone Number*, *Email*, and create a *Password*.\n3. Click *Register* to immediately create your account!\n_(Already have an account? Login at: https://apexprime.club/login)_\n\n*Step 2: Fund Your Wallet*\n1. From your dashboard, tap *Fund Wallet / Top-Up* (or go to: https://apexprime.club/topup).\n2. Pay via *Paystack* (Mobile Money or ATM Card) or direct MoMo.\n3. Your wallet will be credited instantly!\n\n*Step 3: Place Your Order*\n1. Tap *Buy Data Bundle* on your user dashboard.\n2. Select your network (*MTN*, *Telecel*, or *AT Ishare*).\n3. Choose your bundle package size (*1GB, 2GB, 5GB, 10GB*, etc.).\n4. Enter the recipient phone number.\n5. Tap *Buy Now* / *Submit*!\n\n*Automated Delivery*: Bundles are dispatched and delivered to the recipient line within seconds!\n\n━━━━━━━━━━━━━━━━━━━━━\n*Quick Shortcuts*:\n• Reply *4* to verify a payment reference & credit your wallet\n• Reply *3* or *status <order_id>* to track order delivery\n• Reply *balance* to check your current wallet balance\n• Or reply with your *User Code* (e.g. \`317\` or \`APEX-317\`) to order directly in chat\n• Reply *menu* to return to the main menu`;
     }
 
     // Direct 1-line WAEC check command (e.g. "check wassce 0010101001 2024 WSC12345678 123456789012")
@@ -1064,7 +1064,7 @@ async function handleCustomerInteractiveSession(phone, text, name) {
     // 2. Trigger "2" / "check result" / "result checker" / "checker"
     if (lower === '2' || lower === '2.' || ['check result', 'result', 'results', 'waec', 'checker', 'result checker'].includes(lower)) {
         customerSessions.set(phone, { step: 'waec_exam_type', data: {}, timestamp: now });
-        return `🎓 *WAEC Result Checker — WASSCE & BECE Guide*\n━━━━━━━━━━━━━━━━━━━━━\nHere is how to buy Result Checker cards and check your WASSCE or BECE results online:\n\n💳 *Where to Buy Result Checker Cards*:\nBuy genuine WASSCE & BECE checker cards with instant card PIN & serial delivery via:\n1. *Apex Prime Digital Store*:\n   🌐 https://apexprime.club/digital_store\n2. *Instant Payroute Direct Link (MoMo / Card)*:\n   🌐 https://payroute.name/mr-nipah\n\n━━━━━━━━━━━━━━━━━━━━━\n📋 *Steps to Check WASSCE Results Online*:\n1. Go to: https://ghana.waecdirect.org/\n2. Enter your 10-digit *Index Number* (e.g. \`0010101001\`)\n3. Select Exam Type: *W.A.S.S.C.E. (School)* or *(Private)*\n4. Select Exam Year (e.g. *2024*)\n5. Enter your *Card Serial Number* (e.g. \`WSC12345678\`)\n6. Enter your 12-digit *Card PIN*\n7. Click *Submit* to view and print your result slip!\n\n━━━━━━━━━━━━━━━━━━━━━\n📋 *Steps to Check BECE Results Online*:\n1. Go to: https://ghana.waecdirect.org/\n2. Enter your 10-digit *Index Number* (e.g. \`0010101001\`)\n3. Select Exam Type: *B.E.C.E. (School)* or *(Private)*\n4. Select Exam Year (e.g. *2024*)\n5. Enter your *Card Serial Number* (e.g. \`BCE12345678\`)\n6. Enter your 12-digit *Card PIN*\n7. Click *Submit* to view and print your result slip!\n\n━━━━━━━━━━━━━━━━━━━━━\n🤖 *Check Result in WhatsApp*:\nReply *wassce* or *bece* to let our bot check your result and calculate your aggregates automatically right here!\n• Reply *my pins* to view checker cards purchased on this number\n• Reply *menu* to return to the main menu`;
+        return `*WAEC Result Checker — WASSCE & BECE Guide*\n━━━━━━━━━━━━━━━━━━━━━\nHere is how to buy Result Checker cards and check your WASSCE or BECE results online:\n\n*Where to Buy Result Checker Cards*:\nBuy genuine WASSCE & BECE checker cards with instant card PIN & serial delivery via:\n1. *Apex Prime Digital Store*:\n   https://apexprime.club/digital_store\n2. *Instant Payroute Direct Link (MoMo / Card)*:\n   https://payroute.name/mr-nipah\n\n━━━━━━━━━━━━━━━━━━━━━\n*Steps to Check WASSCE Results Online*:\n1. Go to: https://ghana.waecdirect.org/\n2. Enter your 10-digit *Index Number* (e.g. \`0010101001\`)\n3. Select Exam Type: *W.A.S.S.C.E. (School)* or *(Private)*\n4. Select Exam Year (e.g. *2024*)\n5. Enter your *Card Serial Number* (e.g. \`WSC12345678\`)\n6. Enter your 12-digit *Card PIN*\n7. Click *Submit* to view and print your result slip!\n\n━━━━━━━━━━━━━━━━━━━━━\n*Steps to Check BECE Results Online*:\n1. Go to: https://ghana.waecdirect.org/\n2. Enter your 10-digit *Index Number* (e.g. \`0010101001\`)\n3. Select Exam Type: *B.E.C.E. (School)* or *(Private)*\n4. Select Exam Year (e.g. *2024*)\n5. Enter your *Card Serial Number* (e.g. \`BCE12345678\`)\n6. Enter your 12-digit *Card PIN*\n7. Click *Submit* to view and print your result slip!\n\n━━━━━━━━━━━━━━━━━━━━━\n*Check Result in WhatsApp*:\nReply *wassce* or *bece* to let our bot check your result and calculate your aggregates automatically right here!\n• Reply *my pins* to view checker cards purchased on this number\n• Reply *menu* to return to the main menu`;
     }
 
     // 3. Trigger "3" / "check status" / "track" / "status"
@@ -1079,7 +1079,6 @@ async function handleCustomerInteractiveSession(phone, text, name) {
         const statusRes = await callWebsiteApi({ op: 'check_status', search: query });
         if (statusRes && statusRes.success && statusRes.order) {
             const o = statusRes.order;
-            const statusEmoji = (o.status === 'completed' || o.status === 'Completed') ? '✅' : (o.status === 'failed' ? '❌' : '⏳');
             return `*ORDER STATUS REPORT*\n━━━━━━━━━━━━━━━━━━━━━\nOrder ID: \`#${o.id}\`\nNetwork: ${o.network || 'Data'}\nRecipient: \`${o.recipient_phone || 'N/A'}\`\nBundle: ${o.gb_amount || '1'} GB\nDelivery Status: *${(o.status || 'processing').toUpperCase()}*\nGateway Message: ${o.message || 'Dispatched via Gateway'}\nDate Placed: ${o.created_at || 'Recently'}\n━━━━━━━━━━━━━━━━━━━━━`;
         } else {
             return `No order found matching \`${query}\`. Please verify your Order ID or phone number.`;
@@ -1120,18 +1119,18 @@ async function handleCustomerInteractiveSession(phone, text, name) {
 
     // 6. Trigger "6" / "other services" (Academic Writing, Website Design, Apple Plans, Merchant Onboarding)
     if (lower === '6' || lower === '6.' || ['other services', 'other service', 'services', 'academic writing', 'website design', 'website designing', 'apple plans', 'apple plan', 'merchant onboarding'].includes(lower)) {
-        return `✨ *Apex Prime Tech — Other Services*\n━━━━━━━━━━━━━━━━━━━━━\nWe offer professional, reliable digital & tech services tailored for your academic and business success:\n\n📚 *1. Academic Writing & Research*\n• Term papers, essays, research proposals & thesis/dissertations\n• Literature reviews, editing, formatting & proofreading\n• Data analysis & interpretation (SPSS, Excel, Python, R)\n• 100% original, AI-free & plagiarism-checked content\n\n💻 *2. Website Designing & Development*\n• Modern business, corporate & portfolio websites\n• Online stores & eCommerce portals with MoMo/Card payments\n• Custom web applications, school/hospital management portals\n• Fast cloud hosting, custom domain, professional emails & SSL\n\n🍎 *3. Apple Plans & Subscriptions*\n• Apple Developer accounts registration & setup assistance\n• iCloud+ storage upgrade plans & cloud backups\n• Apple Music, Apple Arcade & family sharing setup\n• Apple ID configuration, device setup & region switching\n\n💼 *4. Merchant Onboarding & Agency*\n• Become an Apex Prime Data Bundle & WAEC Reseller Agent\n• Access wholesale pricing to maximize your profit margins\n• Merchant Mobile Money payment gateway integration\n• Dedicated merchant portal with instant automated delivery\n\n━━━━━━━━━━━━━━━━━━━━━\n📞 *How to Order or Get a Quote*:\n• Reply *5* to chat with an agent right now!\n• Direct WhatsApp: 0553381853 (https://wa.me/233553381853)\n• Visit our website: https://apexprime.club\n• Reply *menu* to return to the main menu`;
+        return `*Apex Prime Tech — Other Services*\n━━━━━━━━━━━━━━━━━━━━━\nWe offer professional, reliable digital & tech services tailored for your academic and business success:\n\n*1. Academic Writing & Research*\n• Term papers, essays, research proposals & thesis/dissertations\n• Literature reviews, editing, formatting & proofreading\n• Data analysis & interpretation (SPSS, Excel, Python, R)\n• 100% original, AI-free & plagiarism-checked content\n\n*2. Website Designing & Development*\n• Modern business, corporate & portfolio websites\n• Online stores & eCommerce portals with MoMo/Card payments\n• Custom web applications, school/hospital management portals\n• Fast cloud hosting, custom domain, professional emails & SSL\n\n*3. Apple Plans & Subscriptions*\n• Apple Developer accounts registration & setup assistance\n• iCloud+ storage upgrade plans & cloud backups\n• Apple Music, Apple Arcade & family sharing setup\n• Apple ID configuration, device setup & region switching\n\n*4. Merchant Onboarding & Agency*\n• Become an Apex Prime Data Bundle & WAEC Reseller Agent\n• Access wholesale pricing to maximize your profit margins\n• Merchant Mobile Money payment gateway integration\n• Dedicated merchant portal with instant automated delivery\n\n━━━━━━━━━━━━━━━━━━━━━\n*How to Order or Get a Quote*:\n• Reply *5* to chat with an agent right now!\n• Direct WhatsApp: 0553381853 (https://wa.me/233553381853)\n• Visit our website: https://apexprime.club\n• Reply *menu* to return to the main menu`;
     }
 
     // 7. Trigger "7" / "link" / "link bot" / "personal bot" / "phone number"
     if (lower === '7' || lower === '7.' || ['link', 'link bot', 'phone number', 'personal bot', 'activate bot', 'link with phone number', 'link phone'].includes(lower)) {
-        return `📲 *Link WhatsApp with Phone Number (Personal Bot)*\n━━━━━━━━━━━━━━━━━━━━━\nActivate your own personal WhatsApp bot directly on your phone number without scanning any QR code!\n\n✨ *Features of Your Personal Bot:*\n• 🛡️ *Anti-Delete Recovery:* View deleted messages & photos forwarded privately to your DM.\n• 👁️ *Save View-Once:* View-once images & videos are unlocked and saved automatically.\n• 🎵 *Full-Duration Music:* Download complete songs by typing *.play <song name>*.\n• 🎬 *Video Downloader:* Automatic TikTok, YouTube, and Instagram reel downloads.\n• 👁️ *Auto-View & Auto-Like Status:* Automatically view contact statuses and react with emojis.\n• 🤖 *Apex AI Assistant:* Ask questions anytime with *@Apex_Assistant260* or *.ai*.\n• 🔒 *100% Private Mode:* The bot runs as your personal tool — it will NEVER send customer auto-replies to your friends or contacts!\n\n━━━━━━━━━━━━━━━━━━━━━\n🚀 *How to Link Your WhatsApp in 1 Minute:*\n1. Visit: https://apexprime.club/whatsapp_bot_activation\n2. Click *Link with Phone Number*\n3. Enter your WhatsApp number (e.g. \`0559623850\`)\n4. Copy the *8-digit Pairing Code* shown on screen\n5. Open WhatsApp > tap *Linked Devices* > *Link a Device* > *Link with phone number instead*\n6. Enter the 8-digit code to link instantly!\n\n🌐 *Link Your Account Now:*\n👉 https://apexprime.club/whatsapp_bot_activation\n\n_(Reply *menu* to return to the main menu)_`;
+        return `*Link WhatsApp with Phone Number (Personal Bot)*\n━━━━━━━━━━━━━━━━━━━━━\nActivate your own personal WhatsApp bot directly on your phone number without scanning any QR code!\n\n*Features of Your Personal Bot:*\n• *Anti-Delete Recovery:* View deleted messages & photos forwarded privately to your DM.\n• *Save View-Once:* View-once images & videos are unlocked and saved automatically.\n• *Full-Duration Music:* Download complete songs by typing *.play <song name>*.\n• *Video Downloader:* Automatic TikTok, YouTube, and Instagram reel downloads.\n• *Auto-View & Auto-Like Status:* Automatically view contact statuses and react with emojis.\n• *Apex AI Assistant:* Ask questions anytime with *@Apex_Assistant260* or *.ai*.\n• *100% Private Mode:* The bot runs as your personal tool — it will NEVER send customer auto-replies to your friends or contacts!\n\n━━━━━━━━━━━━━━━━━━━━━\n*How to Link Your WhatsApp in 1 Minute:*\n1. Visit: https://apexprime.club/whatsapp_bot_activation\n2. Click *Link with Phone Number*\n3. Enter your WhatsApp number (e.g. \`0559623850\`)\n4. Copy the *8-digit Pairing Code* shown on screen\n5. Open WhatsApp > tap *Linked Devices* > *Link a Device* > *Link with phone number instead*\n6. Enter the 8-digit code to link instantly!\n\n*Link Your Account Now:*\nhttps://apexprime.club/whatsapp_bot_activation\n\n_(Reply *menu* to return to the main menu)_`;
     }
 
     // 8. Trigger "8" / "buy from me"
     if (lower === '8' || lower === '8.' || ['buy from me', 'buy fromme', 'buyfromme'].includes(lower)) {
         customerSessions.set(phone, { step: 'order_user_code', data: {}, timestamp: now });
-        return `🛒 *Buy From Me — Apex Prime Tech*\n━━━━━━━━━━━━━━━━━━━━━\nPlease enter your *User Code* to continue:\n• Example: \`APEX-317\` or \`317\`\n\n_(Your User Code is your Apex Prime account ID on our portal)_\n_(Reply *cancel* anytime to abort)_`;
+        return `*Buy From Me — Apex Prime Tech*\n━━━━━━━━━━━━━━━━━━━━━\nPlease enter your *User Code* to continue:\n• Example: \`APEX-317\` or \`317\`\n\n_(Your User Code is your Apex Prime account ID on our portal)_\n_(Reply *cancel* anytime to abort)_`;
     }
 
     // Trigger "balance" / "wallet"
@@ -1139,7 +1138,7 @@ async function handleCustomerInteractiveSession(phone, text, name) {
         const userRes = await callWebsiteApi({ op: 'lookup_user', search: phone });
         if (userRes && userRes.success && userRes.user) {
             const u = userRes.user;
-            return `*Apex Prime Wallet Balance*\n━━━━━━━━━━━━━━━━━━━━━\nUser: *${u.username}* (\`APEX-${u.id}\`)\n📱 Phone: \`${u.phone}\`\nBalance: *GHS ${parseFloat(u.wallet_balance || 0).toFixed(2)}*\nTier: *${(u.role || 'client').toUpperCase()}*\n━━━━━━━━━━━━━━━━━━━━━\nTop up your wallet anytime at: https://apexprime.club/topup`;
+            return `*Apex Prime Wallet Balance*\n━━━━━━━━━━━━━━━━━━━━━\nUser: *${u.username}* (\`APEX-${u.id}\`)\nPhone: \`${u.phone}\`\nBalance: *GHS ${parseFloat(u.wallet_balance || 0).toFixed(2)}*\nTier: *${(u.role || 'client').toUpperCase()}*\n━━━━━━━━━━━━━━━━━━━━━\nTop up your wallet anytime at: https://apexprime.club/topup`;
         } else {
             return `*Apex Prime Wallet Balance*\n━━━━━━━━━━━━━━━━━━━━━\nPlease enter your *User Code* (e.g. \`317\` or \`APEX-317\`) to check your balance, or login at:\nhttps://apexprime.club/login`;
         }
@@ -1167,7 +1166,7 @@ async function handleCustomerInteractiveSession(phone, text, name) {
                 data: { user_id: u.id, username: u.username, wallet_balance: bal, role: u.role || 'client' },
                 timestamp: now
             });
-            return `*User Verified*: *${u.username}* (\`APEX-${u.id}\`)\n*Tier*: *${role}*\n*Wallet Balance*: *GHS ${bal.toFixed(2)}*\n━━━━━━━━━━━━━━━━━━━━━\nPlease choose an option by replying with a number (*1 - 5*):\n\n1️⃣ *MTN Data Bundles*\n2️⃣ *Telecel Data Bundles*\n3️⃣ *AT / AirtelTigo Ishare*\n4️⃣ *MTN AFA Registration*\n5️⃣ *Result Checker Cards (WASSCE / BECE)*\n\n_(Reply *cancel* anytime to abort)_`;
+            return `*User Verified*: *${u.username}* (\`APEX-${u.id}\`)\n*Tier*: *${role}*\n*Wallet Balance*: *GHS ${bal.toFixed(2)}*\n━━━━━━━━━━━━━━━━━━━━━\nPlease choose an option by replying with a number (*1 - 5*):\n\n1. *MTN Data Bundles*\n2. *Telecel Data Bundles*\n3. *AT / AirtelTigo Ishare*\n4. *MTN AFA Registration*\n5. *Result Checker Cards (WASSCE / BECE)*\n\n_(Reply *cancel* anytime to abort)_`;
         }
     }
 

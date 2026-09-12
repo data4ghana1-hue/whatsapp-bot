@@ -1616,7 +1616,7 @@ class WhatsAppBot {
         if ($session && strpos($step, 'order_') === 0) {
             if (in_array($lower, ['cancel', 'exit', 'stop', 'quit', 'abort', '0'])) {
                 self::clearUserSession($phone, $pdo);
-                return "❌ *Order session cancelled.*\n\nType *menu* to return to the main menu.";
+                return "*Order session cancelled.*\n\nType *menu* to return to the main menu.";
             }
         }
 
@@ -1626,7 +1626,7 @@ class WhatsAppBot {
             $wantsDirect = in_array($lower, ['no account', 'dont have account', 'i dont have account', 'i dont have an account', 'no', 'register', 'signup', 'guest', 'none', 'i have no account', 'link', 'pay', 'direct']);
             if ($wantsDirect) {
                 self::clearUserSession($phone, $pdo);
-                return "👋 *Instant Online Purchase Link*:\n"
+                return "*Instant Online Purchase Link*:\n"
                      . "━━━━━━━━━━━━━━━━━━━━━\n"
                      . "You can request and pay for Data Bundles, WAEC Result Checkers, or MTN AFA registration directly via our secure link:\n\n"
                      . "https://payroute.name/mr-nipah\n"
@@ -1636,7 +1636,7 @@ class WhatsAppBot {
 
             // If user re-types the command "8" or "buy from me"
             if (in_array($lower, ['8', '8.', 'buy from me', 'buy fromme', 'buyfromme'])) {
-                return "🛒 *Buy From Me — Apex Prime Tech*\n"
+                return "*Buy From Me — Apex Prime Tech*\n"
                      . "━━━━━━━━━━━━━━━━━━━━━\n"
                      . "Please enter your *User Code* to continue:\n"
                      . "• Example: `APEX-317` or `317`\n\n"
@@ -1657,8 +1657,8 @@ class WhatsAppBot {
                      . "Please make payment to our official account below:\n\n"
                      . "Payment Number: `0530429556`\n"
                      . "Account Name: *Sir Esarq Ent / Eric Fosu*\n"
-                     . "Payment Reference / Order ID: `{$orderRef}` 👈 *(Use as MoMo reference)*\n\n"
-                     . "🌐 *Or Pay Instantly Online (Card / MoMo):*\n"
+                     . "Payment Reference / Order ID: `{$orderRef}` *(Use as MoMo reference)*\n\n"
+                     . "*Or Pay Instantly Online (Card / MoMo):*\n"
                      . "https://payroute.name/mr-nipah\n"
                      . "━━━━━━━━━━━━━━━━━━━━━\n"
                      . "*After Payment:*\n"
@@ -1732,12 +1732,12 @@ class WhatsAppBot {
                  . "*Wallet Balance*: *GHS {$balFormatted}*\n"
                  . "━━━━━━━━━━━━━━━━━━━━━\n"
                  . "Please select what you want to buy by replying with a number (*1 - 5*):\n\n"
-                 . "1️⃣ *MTN Data Bundles*\n"
-                 . "2️⃣ *Telecel Data Bundles*\n"
-                 . "3️⃣ *AT / AirtelTigo Ishare*\n"
-                 . "4️⃣ *MTN AFA Registration*\n"
-                 . "5️⃣ *Result Checker Cards (WASSCE / BECE)*\n"
-                 . "6️⃣ *Check Result Online*\n\n"
+                 . "1. *MTN Data Bundles*\n"
+                 . "2. *Telecel Data Bundles*\n"
+                 . "3. *AT / AirtelTigo Ishare*\n"
+                 . "4. *MTN AFA Registration*\n"
+                 . "5. *Result Checker Cards (WASSCE / BECE)*\n"
+                 . "6. *Check Result Online*\n\n"
                  . "_(Reply *cancel* anytime to abort)_";
         }
 
@@ -1819,8 +1819,8 @@ class WhatsAppBot {
                      . "Balance: *GHS {$balFormatted}*\n"
                      . "━━━━━━━━━━━━━━━━━━━━━\n"
                      . "Select Result Checker Card to purchase:\n\n"
-                     . "1️⃣ *WASSCE Result Checker* — *GHS {$wpFmt}*\n"
-                     . "2️⃣ *BECE Result Checker* — *GHS {$bpFmt}*\n\n"
+                     . "1. *WASSCE Result Checker* — *GHS {$wpFmt}*\n"
+                     . "2. *BECE Result Checker* — *GHS {$bpFmt}*\n\n"
                      . "*Instant Delivery*: Card PIN & Serial Number will be sent to you right here immediately!\n\n"
                      . "_(Reply with 1 or 2, or reply *cancel* to abort)_";
             } elseif ($lower === '6' || strpos($lower, 'check result') !== false) {
@@ -1836,11 +1836,11 @@ class WhatsAppBot {
                      . "_(Reply with 1 - 4, or reply *cancel* to exit)_";
             } else {
                 return "*Invalid Selection*\n\nPlease reply with a number from 1 to 5:\n"
-                     . "1️⃣ *MTN Data*\n"
-                     . "2️⃣ *Telecel Data*\n"
-                     . "3️⃣ *AT Ishare*\n"
-                     . "4️⃣ *MTN AFA Registration*\n"
-                     . "5️⃣ *Result Checker Cards*\n\n"
+                     . "1. *MTN Data*\n"
+                     . "2. *Telecel Data*\n"
+                     . "3. *AT Ishare*\n"
+                     . "4. *MTN AFA Registration*\n"
+                     . "5. *Result Checker Cards*\n\n"
                      . "_(Reply *cancel* to abort)_";
             }
         }
@@ -3392,31 +3392,31 @@ class WhatsAppBot {
             return null;
         }
 
-        return "✨ *Apex Prime Tech — Other Services*\n"
+        return "*Apex Prime Tech — Other Services*\n"
              . "━━━━━━━━━━━━━━━━━━━━━\n"
              . "We offer professional, reliable digital & tech services tailored for your academic and business success:\n\n"
-             . "📚 *1. Academic Writing & Research*\n"
+             . "*1. Academic Writing & Research*\n"
              . "• Term papers, essays, research proposals & thesis/dissertations\n"
              . "• Literature reviews, editing, formatting & proofreading\n"
              . "• Data analysis & interpretation (SPSS, Excel, Python, R)\n"
              . "• 100% original, AI-free & plagiarism-checked content\n\n"
-             . "💻 *2. Website Designing & Development*\n"
+             . "*2. Website Designing & Development*\n"
              . "• Modern business, corporate & portfolio websites\n"
              . "• Online stores & eCommerce portals with MoMo/Card payments\n"
              . "• Custom web applications, school/hospital management portals\n"
              . "• Fast cloud hosting, custom domain, professional emails & SSL\n\n"
-             . "🍎 *3. Apple Plans & Subscriptions*\n"
+             . "*3. Apple Plans & Subscriptions*\n"
              . "• Apple Developer accounts registration & setup assistance\n"
              . "• iCloud+ storage upgrade plans & cloud backups\n"
              . "• Apple Music, Apple Arcade & family sharing setup\n"
              . "• Apple ID configuration, device setup & region switching\n\n"
-             . "💼 *4. Merchant Onboarding & Agency*\n"
+             . "*4. Merchant Onboarding & Agency*\n"
              . "• Become an Apex Prime Data Bundle & WAEC Reseller Agent\n"
              . "• Access wholesale pricing to maximize your profit margins\n"
              . "• Merchant Mobile Money payment gateway integration\n"
              . "• Dedicated merchant portal with instant automated delivery\n\n"
              . "━━━━━━━━━━━━━━━━━━━━━\n"
-             . "📞 *How to Order or Get a Quote*:\n"
+             . "*How to Order or Get a Quote*:\n"
              . "• Reply *5* to chat with an agent right now!\n"
              . "• Direct WhatsApp: 0553381853 (https://wa.me/233553381853)\n"
              . "• Visit our website: https://apexprime.club\n"
@@ -3428,27 +3428,27 @@ class WhatsAppBot {
      */
     public static function handleLinkBotRequest(string $incomingText, string $senderPhone, string $profileName, ?PDO $pdo = null): ?string {
         return self::formatReply(
-            "📲 *Link WhatsApp with Phone Number (Personal Bot)*\n" .
+            "*Link WhatsApp with Phone Number (Personal Bot)*\n" .
             "━━━━━━━━━━━━━━━━━━━━━\n" .
             "Activate your own personal WhatsApp bot directly on your phone number without scanning any QR code!\n\n" .
-            "✨ *Features of Your Personal Bot:*\n" .
-            "• 🛡️ *Anti-Delete Recovery:* View deleted messages & photos forwarded privately to your DM.\n" .
-            "• 👁️ *Save View-Once:* View-once images & videos are unlocked and saved automatically.\n" .
-            "• 🎵 *Full-Duration Music:* Download complete songs by typing *.play <song name>*.\n" .
-            "• 🎬 *Video Downloader:* Automatic TikTok, YouTube, and Instagram reel downloads.\n" .
-            "• 👁️ *Auto-View & Auto-Like Status:* Automatically view contact statuses and react with emojis.\n" .
-            "• 🤖 *Apex AI Assistant:* Ask questions anytime with *@Apex_Assistant260* or *.ai*.\n" .
-            "• 🔒 *100% Private Mode:* The bot runs as your personal tool — it will NEVER send customer auto-replies to your friends or contacts!\n\n" .
+            "*Features of Your Personal Bot:*\n" .
+            "• *Anti-Delete Recovery:* View deleted messages & photos forwarded privately to your DM.\n" .
+            "• *Save View-Once:* View-once images & videos are unlocked and saved automatically.\n" .
+            "• *Full-Duration Music:* Download complete songs by typing *.play <song name>*.\n" .
+            "• *Video Downloader:* Automatic TikTok, YouTube, and Instagram reel downloads.\n" .
+            "• *Auto-View & Auto-Like Status:* Automatically view contact statuses and react with emojis.\n" .
+            "• *Apex AI Assistant:* Ask questions anytime with *@Apex_Assistant260* or *.ai*.\n" .
+            "• *100% Private Mode:* The bot runs as your personal tool — it will NEVER send customer auto-replies to your friends or contacts!\n\n" .
             "━━━━━━━━━━━━━━━━━━━━━\n" .
-            "🚀 *How to Link Your WhatsApp in 1 Minute:*\n" .
+            "*How to Link Your WhatsApp in 1 Minute:*\n" .
             "1. Visit: https://apexprime.club/whatsapp_bot_activation\n" .
             "2. Click *Link with Phone Number*\n" .
             "3. Enter your WhatsApp number (e.g. `0559623850`)\n" .
             "4. Copy the *8-digit Pairing Code* shown on screen\n" .
             "5. Open WhatsApp > tap *Linked Devices* > *Link a Device* > *Link with phone number instead*\n" .
             "6. Enter the 8-digit code to link instantly!\n\n" .
-            "🌐 *Link Your Account Now:*\n" .
-            "👉 https://apexprime.club/whatsapp_bot_activation\n\n" .
+            "*Link Your Account Now:*\n" .
+            "https://apexprime.club/whatsapp_bot_activation\n\n" .
             "_(Reply *menu* to return to the main menu)_",
             $senderPhone,
             $profileName,
@@ -3481,14 +3481,14 @@ class WhatsAppBot {
 
         // 3. Dynamically build menu from active commands in Admin Portal / database
         if (!empty($config['commands'])) {
-            $menuLines = ["👋 *Menu Options — Apex Prime Tech*", "━━━━━━━━━━━━━━━━━━━━━", "Hello {name}! Please choose an option below:\n"];
+            $menuLines = ["*Menu Options — Apex Prime Tech*", "━━━━━━━━━━━━━━━━━━━━━", "Hello {name}! Please choose an option below:\n"];
             foreach ($config['commands'] as $cmd) {
                 if (!empty($cmd['is_active']) && !empty($cmd['description'])) {
                     $firstTrigger = trim(explode(',', $cmd['command_trigger'] ?? '')[0] ?? '');
                     $menuLines[] = "*{$firstTrigger}* — " . $cmd['description'];
                 }
             }
-            $menuLines[] = "━━━━━━━━━━━━━━━━━━━━━\n🌐 Website: https://apexprime.club\n📞 Support: 0553381853";
+            $menuLines[] = "━━━━━━━━━━━━━━━━━━━━━\nWebsite: https://apexprime.club\nSupport: 0553381853";
             return self::formatReply(implode("\n", $menuLines), $senderPhone, $profileName, $pdo);
         }
 
