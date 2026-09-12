@@ -17,7 +17,7 @@
         "enabled": true,
         "mode": "all",
         "provider": "gemini",
-        "model": "gemini-3.6-flash",
+        "model": "gemini-1.5-flash",
         "bot_name": "Apex AI",
         "username": "@Apex_Assistant260",
         "api_key": "",
@@ -26,15 +26,15 @@
         "allow_groups": true,
         "group_trigger": "@Apex_Assistant260"
     },
-    "fallback_message": "🤖 *Apex Personal WhatsApp Bot*\n━━━━━━━━━━━━━━━━━━━━━\nHello {name}! Welcome to Apex Bot Engine.\n\nActivate your own 24/7 personal WhatsApp Bot with your phone number!\n\n✨ *Features Included:*\n🎵 *.play <song>* — Download 100% full music worldwide\n🤖 *.ai <question>* — Meta AI conversational assistant (@Apex_Assistant260)\n🛡️ *Anti-Delete* — Automatically recover deleted messages & media\n📸 *Status Saver* — Download viewed WhatsApp statuses\n🎬 *.yt / .tiktok / .ig* — Instant HD video downloader\n8️⃣ *Buy From Me* — Buy data bundles, MTN AFA & WAEC result checkers using your User Code!\n\n📲 *Link Your Phone Number Here:*\n👉 https://apexprime.club/whatsapp_bot_activation\nOr connect on cloud bot: https://whatsapp-bot-9loi.onrender.com\n\n━━━━━━━━━━━━━━━━━━━━━\n💡 *Note:* When linked via phone number, your personal bot works exclusively for you. Auto-replies to your contacts are completely silenced so your personal chats stay private!\n🌐 Website: https://apexprime.club\n📞 Support: 0553381853",
+    "fallback_message": "👋 *Welcome to Apex Prime Tech*\n━━━━━━━━━━━━━━━━━━━━━\nHello {name} ! How can we help you today?\n\nPlease choose an option by replying with a number (*1 - 8*) or text:\n\n1️⃣ *Place Order*\nBuy MTN, Telecel & AT data bundles with instant automated delivery.\n\n2️⃣ *Check Result*\nCheck your WASSCE or BECE results online.\n\n3️⃣ *Check Status*\nTrack your data bundle or MTN AFA registration delivery status.\n\n4️⃣ *Verify Payment*\nConfirm your MoMo or Paystack payment reference.\n\n5️⃣ *Talk to an Agent*\nConnect directly with our customer support team.\n\n6️⃣ *Other Services*\nAcademic writing, website design, Apple plans & merchant onboarding.\n\n7️⃣ *Link Personal Bot (Phone Number)*\nActivate your own personal WhatsApp bot with anti-delete, status saver, music downloader & AI!\n\n8️⃣ *Buy From Me*\nPurchase data bundles, MTN AFA registration & WAEC result checkers directly using your User Code!\n━━━━━━━━━━━━━━━━━━━━━\n🌐 Website: https://apexprime.club\n📲 Link Personal Bot: https://apexprime.club/whatsapp_bot_activation\n📞 Support: 0553381853",
     "commands": [
         {
             "id": 1,
-            "command_trigger": "hi,hello,hey,menu,start,options,commands,help",
+            "command_trigger": "hi,hello,hey,menu,meny,start,options,commands,help",
             "match_type": "contains",
             "action_type": "text",
-            "response_text": "🤖 *Apex Personal WhatsApp Bot*\n━━━━━━━━━━━━━━━━━━━━━\nHello {name}! Welcome to Apex Bot Engine.\n\nActivate your own 24/7 personal WhatsApp Bot with your phone number!\n\n✨ *Features Included:*\n🎵 *.play <song>* — Download 100% full music worldwide\n🤖 *.ai <question>* — Meta AI conversational assistant (@Apex_Assistant260)\n🛡️ *Anti-Delete* — Automatically recover deleted messages & media\n📸 *Status Saver* — Download viewed WhatsApp statuses\n🎬 *.yt / .tiktok / .ig* — Instant HD video downloader\n8️⃣ *Buy From Me* — Buy data bundles, MTN AFA & WAEC result checkers using your User Code!\n\n📲 *Link Your Phone Number Here:*\n👉 https://apexprime.club/whatsapp_bot_activation\nOr connect on cloud bot: https://whatsapp-bot-9loi.onrender.com\n\n━━━━━━━━━━━━━━━━━━━━━\n💡 *Note:* When linked via phone number, your personal bot works exclusively for you. Auto-replies to your contacts are completely silenced so your personal chats stay private!\n🌐 Website: https://apexprime.club\n📞 Support: 0553381853",
-            "description": "Main Menu - Apex Personal WhatsApp Bot",
+            "response_text": "👋 *Welcome to Apex Prime Tech*\n━━━━━━━━━━━━━━━━━━━━━\nHello {name} ! How can we help you today?\n\nPlease choose an option by replying with a number (*1 - 8*) or text:\n\n1️⃣ *Place Order*\nBuy MTN, Telecel & AT data bundles with instant automated delivery.\n\n2️⃣ *Check Result*\nCheck your WASSCE or BECE results online.\n\n3️⃣ *Check Status*\nTrack your data bundle or MTN AFA registration delivery status.\n\n4️⃣ *Verify Payment*\nConfirm your MoMo or Paystack payment reference.\n\n5️⃣ *Talk to an Agent*\nConnect directly with our customer support team.\n\n6️⃣ *Other Services*\nAcademic writing, website design, Apple plans & merchant onboarding.\n\n7️⃣ *Link Personal Bot (Phone Number)*\nActivate your own personal WhatsApp bot with anti-delete, status saver, music downloader & AI!\n\n8️⃣ *Buy From Me*\nPurchase data bundles, MTN AFA registration & WAEC result checkers directly using your User Code!\n━━━━━━━━━━━━━━━━━━━━━\n🌐 Website: https://apexprime.club\n📲 Link Personal Bot: https://apexprime.club/whatsapp_bot_activation\n📞 Support: 0553381853",
+            "description": "Main Menu - Apex Prime Tech",
             "is_active": true
         },
         {
