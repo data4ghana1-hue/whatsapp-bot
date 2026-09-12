@@ -9,7 +9,6 @@
   "dependencies": {
     "@distube/ytdl-core": "^4.16.12",
     "@whiskeysockets/baileys": "latest",
-    "m3u8stream": "^0.8.6",
     "pino": "^9.6.0",
     "play-dl": "^1.9.7",
     "qrcode": "^1.5.4",
