@@ -1039,12 +1039,13 @@ class WhatsAppBot {
         if ($userId === 317) {
             return [
                 'id'             => 317,
-                'username'       => 'Eric Fosu',
-                'phone'          => '0541145310',
-                'email'          => 'info@apexprime.club',
-                'wallet_balance' => 50.00,
-                'afa_balance'    => 5,
-                'role'           => 'agent'
+                'username'       => 'MrNipah',
+                'phone'          => '0559623850',
+                'email'          => 'data4ghana1@gmail.com',
+                'wallet_balance' => 2.40,
+                'afa_balance'    => 10,
+                'role'           => 'elite',
+                'payment_ref'    => '348'
             ];
         }
 
