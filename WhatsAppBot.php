@@ -500,6 +500,21 @@ class WhatsAppBot {
             }
         }
 
+        // 5. If we have multiple numeric tokens (10-14 digits) and no serial was found:
+        // First is Serial, second is PIN (common for BECE 12-digit voucher serials on eresults.waecgh.org)
+        if (empty($serial) || empty($pin)) {
+            $numTokens = [];
+            foreach ($cleanedTokens as $tok) {
+                if (preg_match('/^\d{10,14}$/', $tok)) {
+                    $numTokens[] = $tok;
+                }
+            }
+            if (count($numTokens) >= 2) {
+                if (empty($serial)) $serial = $numTokens[0];
+                if (empty($pin)) $pin = $numTokens[1];
+            }
+        }
+
         // Clean up serial if it has trailing/leading dashes or punctuation
         if (!empty($serial)) {
             $serial = trim($serial, " \t\n\r\0\x0B\"'()[]{}*#:-");
@@ -541,10 +556,17 @@ class WhatsAppBot {
 
             if (!empty($serial) && !empty($pin)) {
                 $res = WaecResultChecker::checkResult($examType, $index, $year, $serial, $pin);
+                if (!empty($res['image_file']) || !empty($res['image_path'])) {
+                    $GLOBALS['waec_latest_image'] = $res['image_file'] ?? $res['image_path'];
+                }
+                if (!empty($res['reply'])) {
+                    return $res['reply'];
+                }
                 if ($res['success']) {
                     return WaecResultChecker::formatResultSlip($res);
                 } else {
-                    return "❌ *WAEC Result Retrieval Notice*:\n\n" . $res['message'] . "\n\n"
+                    $msg = $res['message'] ?? $res['error_message'] ?? 'Official notice from WAEC Direct';
+                    return "❌ *WAEC Result Retrieval Notice*:\n\n" . $msg . "\n\n"
                         . "━━━━━━━━━━━━━━━━━━━━━\n"
                         . "📋 *Checked Details*:\n"
                         . "• Exam: {$examType} {$year}\n"
@@ -699,7 +721,7 @@ class WhatsAppBot {
                        . "7. Click *Submit* to view and print your result slip!\n\n"
                        . "━━━━━━━━━━━━━━━━━━━━━\n"
                        . "📋 *Steps to Check BECE Results Online*:\n"
-                       . "1. Go to: https://ghana.waecdirect.org/\n"
+                       . "1. Go to: https://eresults.waecgh.org/\n"
                        . "2. Enter your 10-digit *Index Number* (e.g. `0010101001`)\n"
                        . "3. Select Exam Type: *B.E.C.E. (School)* or *(Private)*\n"
                        . "4. Select Exam Year (e.g. *2024*)\n"
@@ -890,8 +912,12 @@ class WhatsAppBot {
             require_once __DIR__ . '/WaecResultChecker.php';
             $res = WaecResultChecker::checkResult($examType, $index, $year, $serial, $pin);
 
+            if (!empty($res['image_file']) || !empty($res['image_path'])) {
+                $GLOBALS['waec_latest_image'] = $res['image_file'] ?? $res['image_path'];
+            }
+
             if ($res['success']) {
-                $slipText = WaecResultChecker::formatResultSlip($res);
+                $slipText = !empty($res['reply']) ? $res['reply'] : WaecResultChecker::formatResultSlip($res);
 
                 // If candidate provided email, send official email copy!
                 if (!empty($userEmail)) {
@@ -920,8 +946,11 @@ class WhatsAppBot {
 
                 return $slipText;
             } else {
+                if (!empty($res['reply'])) {
+                    return $res['reply'];
+                }
                 $out = "❌ *WAEC Result Retrieval Notice*:\n\n";
-                $out .= $res['message'] . "\n\n";
+                $out .= ($res['message'] ?? 'Notice from WAEC Direct') . "\n\n";
                 $out .= "━━━━━━━━━━━━━━━━━━━━━\n";
                 $out .= "📋 *Submitted Details*:\n";
                 $out .= "• Exam: {$examType} {$year}\n";
@@ -2875,6 +2904,12 @@ class WhatsAppBot {
                 return "*Payment verification cancelled.*\n\nType *menu* to return to the main menu.";
             }
 
+            // If user typed another primary command (like checking WAEC, order, balance), break out of verification session
+            if (preg_match('/^(?:check\s+|waec\s+)?(wassce|bece)\b/i', $cleanText) || in_array($lower, ['menu', '1', '2', '3', '5', '6', '7', '8', 'balance', 'report'])) {
+                self::clearUserSession($phone, $pdo);
+                return null;
+            }
+
             // User enters MoMo Transaction ID or Paystack Reference
             if ($session['step'] === 'verify_payment_ref') {
                 $cleanRef = preg_replace('/[^a-zA-Z0-9_\-]/', '', $cleanText);
@@ -3327,11 +3362,28 @@ class WhatsAppBot {
 
             $ticketCode = 'TICK-' . mt_rand(100000, 999999);
             $orderId = !empty($session['data']['order_id']) ? (int)$session['data']['order_id'] : null;
-            $issueType = $session['data']['issue_type'] ?? 'general';
+            $orderDisplay = !empty($session['data']['order_display']) ? $session['data']['order_display'] : null;
+            $recipientPhone = null;
+
+            if (preg_match('/(?:order\s*(?:id|#|no|ref)?\s*[:#\-\s]*)([A-Za-z0-9_\-]+)/i', $cleanText, $mOid)) {
+                $orderDisplay = trim($mOid[1]);
+                if (preg_match('/\d+/', $orderDisplay, $mNum)) {
+                    $orderId = (int)$mNum[0];
+                }
+            }
+            if (preg_match('/(?:to\s*|phone\s*[:#\-\s]*|recipient\s*[:#\-\s]*)(0\d{9}|233\d{9})/i', $cleanText, $mP)) {
+                $recipientPhone = $mP[1];
+            } elseif (preg_match('/\b(0[235]\d{8})\b/', $cleanText, $mP2)) {
+                $recipientPhone = $mP2[1];
+            }
+
+            $issueType = $session['data']['issue_type'] ?? 'customer_report';
 
             $botReply = "*Support Ticket Created*\n"
                       . "━━━━━━━━━━━━━━━━━━━━━\n"
                       . "• Ticket ID: *{$ticketCode}*\n"
+                      . ($orderDisplay ? "• Order ID: *{$orderDisplay}*\n" : "")
+                      . ($recipientPhone ? "• Recipient: `{$recipientPhone}`\n" : "")
                       . "• Status: *Under Investigation*\n"
                       . "• Priority: *High*\n"
                       . "━━━━━━━━━━━━━━━━━━━━━\n"
@@ -3354,59 +3406,81 @@ class WhatsAppBot {
             return $botReply;
         }
 
-        // Direct 1-line report e.g. "report my order 12345 delayed" or "issue with payment"
-        if (preg_match('/^(?:report|complaint|issue)[:\s]+(.+)$/i', $cleanText, $mReport)) {
-            $reportMsg = trim($mReport[1]);
-            if (strlen($reportMsg) >= 4) {
-                self::clearUserSession($phone, $pdo);
-                $ticketCode = 'TICK-' . mt_rand(100000, 999999);
-                $orderId = null;
-                if (preg_match('/#?(\d{4,8})/', $reportMsg, $mOid)) {
-                    $orderId = (int)$mOid[1];
-                }
-                $botReply = "*Support Ticket Created*\n"
-                          . "━━━━━━━━━━━━━━━━━━━━━\n"
-                          . "• Ticket ID: *{$ticketCode}*\n"
-                          . "• Status: *Under Investigation*\n"
-                          . "• Priority: *High*\n"
-                          . "━━━━━━━━━━━━━━━━━━━━━\n"
-                          . "Thank you for reporting, *{$profileName}*. Our customer support manager has been alerted and will review your issue immediately.\n\n"
-                          . "Direct Support Line: *0553381853*\n"
-                          . "Direct WhatsApp: https://wa.me/233553381853\n"
-                          . "Average response time: *Under 10 minutes*";
+        // Check if message is a comprehensive report / complaint / order issue
+        $isReportMessage = (bool)preg_match(
+            '/(?:\b(?:report|complaint|complain|issue|problem|ticket)\b|' .
+            '\b(?:hasn\'?t|haven\'?t|didn\'?t|not|never)\s+(?:received?|arrived?|delivered?|got)\b|' .
+            '\b(?:yet\s+to\s+receive|delayed|pending\s+too\s+long|failed\s+delivery)\b|' .
+            '\b(?:help\s+me\s+resolve|resolve\s+this)\b|' .
+            '(?:order\s*id\s*[:#]|order\s*#\s*\d+))/i',
+            $cleanText
+        );
 
-                if ($pdo) {
-                    try {
-                        self::ensureTicketsTable($pdo);
-                        $stmt = $pdo->prepare("
-                            INSERT INTO whatsapp_support_tickets (ticket_code, sender_phone, sender_name, order_id, issue_type, message, bot_reply, status, created_at)
-                            VALUES (?, ?, ?, ?, 'direct_report', ?, ?, 'open', NOW())
-                        ");
-                        $stmt->execute([$ticketCode, $phone, $profileName, $orderId, $reportMsg, $botReply]);
-                    } catch (Throwable $e) {}
-                }
-                return $botReply;
-            }
-        }
-
-        // Direct triggers: 5, talk to an agent, support, agent, complaint, report
-        $isReportTrigger = ($lower === '5' || $lower === '5.' || in_array($lower, [
+        // Check if this is just a short trigger (e.g. "5", "report", "support", "agent")
+        $isShortTrigger = ($lower === '5' || $lower === '5.' || in_array($lower, [
             'talk to an agent', 'talk to agent', 'agent', 'support', 'help desk',
-            'complaint', 'report', 'issue', 'problem', 'human', 'representative'
+            'complaint', 'report', 'issue', 'problem', 'human', 'representative', 'help'
         ]));
 
-        if (!$isReportTrigger) {
-            return null;
+        if ($isShortTrigger) {
+            self::saveUserSession($phone, 'report_awaiting_details', ['issue_type' => 'customer_inquiry'], $pdo);
+
+            return "*Apex Prime Tech — Customer Support Desk*\n"
+                 . "━━━━━━━━━━━━━━━━━━━━━\n"
+                 . "Hello *{$profileName}*, our support agents are ready to assist you!\n\n"
+                 . "Please describe your request, question, or issue in detail below:\n"
+                 . "_(If you have an Order ID or Transaction Reference, please include it)_\n\n"
+                 . "_(Reply *cancel* anytime to abort)_";
         }
 
-        self::saveUserSession($phone, 'report_awaiting_details', ['issue_type' => 'customer_inquiry'], $pdo);
+        // If it's a report message with details (or contains order details/issue description)
+        if ($isReportMessage && strlen($cleanText) >= 8) {
+            self::clearUserSession($phone, $pdo);
+            $ticketCode = 'TICK-' . mt_rand(100000, 999999);
+            $orderId = null;
+            $orderDisplay = null;
+            $recipientPhone = null;
 
-        return "*Apex Prime Tech — Customer Support Desk*\n"
-             . "━━━━━━━━━━━━━━━━━━━━━\n"
-             . "Hello *{$profileName}*, our support agents are ready to assist you!\n\n"
-             . "Please describe your request, question, or issue in detail below:\n"
-             . "_(If you have an Order ID or Transaction Reference, please include it)_\n\n"
-             . "_(Reply *cancel* anytime to abort)_";
+            if (preg_match('/(?:order\s*(?:id|#|no|ref)?\s*[:#\-\s]*)([A-Za-z0-9_\-]+)/i', $cleanText, $mOid)) {
+                $orderDisplay = trim($mOid[1]);
+                if (preg_match('/\d+/', $orderDisplay, $mNum)) {
+                    $orderId = (int)$mNum[0];
+                }
+            }
+            if (preg_match('/(?:to\s*|phone\s*[:#\-\s]*|recipient\s*[:#\-\s]*)(0\d{9}|233\d{9})/i', $cleanText, $mP)) {
+                $recipientPhone = $mP[1];
+            } elseif (preg_match('/\b(0[235]\d{8})\b/', $cleanText, $mP2)) {
+                $recipientPhone = $mP2[1];
+            }
+
+            $botReply = "*Support Ticket Created*\n"
+                      . "━━━━━━━━━━━━━━━━━━━━━\n"
+                      . "• Ticket ID: *{$ticketCode}*\n"
+                      . ($orderDisplay ? "• Order ID: *{$orderDisplay}*\n" : "")
+                      . ($recipientPhone ? "• Recipient: `{$recipientPhone}`\n" : "")
+                      . "• Status: *Under Investigation*\n"
+                      . "• Priority: *High*\n"
+                      . "━━━━━━━━━━━━━━━━━━━━━\n"
+                      . "Thank you for reporting, *{$profileName}*. Our customer support manager has been alerted and will review your issue immediately.\n\n"
+                      . "Direct Support Line: *0553381853*\n"
+                      . "Direct WhatsApp: https://wa.me/233553381853\n"
+                      . "Average response time: *Under 10 minutes*";
+
+            if ($pdo) {
+                try {
+                    self::ensureTicketsTable($pdo);
+                    $stmt = $pdo->prepare("
+                        INSERT INTO whatsapp_support_tickets (ticket_code, sender_phone, sender_name, order_id, issue_type, message, bot_reply, status, created_at)
+                        VALUES (?, ?, ?, ?, 'order_issue', ?, ?, 'open', NOW())
+                    ");
+                    $stmt->execute([$ticketCode, $phone, $profileName, $orderId, $cleanText, $botReply]);
+                } catch (Throwable $e) {}
+            }
+
+            return $botReply;
+        }
+
+        return null;
     }
 
     /**
@@ -3595,6 +3669,15 @@ class WhatsAppBot {
                     $replyText = $reportReply;
                     $matchedName = 'REPORT_SESSION';
                 }
+            }
+        }
+
+        // 0.5. Customer Issues, Complaints, and Reports (High Priority Auto-Detection)
+        if (empty($replyText)) {
+            $reportReply = self::handleReportRequest($incomingText, $senderPhone, $profileName, $pdo);
+            if ($reportReply !== null) {
+                $replyText = $reportReply;
+                $matchedName = 'REPORT_ISSUE';
             }
         }
 
@@ -3800,8 +3883,14 @@ class WhatsAppBot {
             'handled'    => true,
             'matched'    => $matchedName,
             'reply'      => $replyText,
+            'is_report'  => in_array($matchedName, ['REPORT_ISSUE', 'REPORT_SESSION']) || (strpos($replyText, 'Support Ticket Created') !== false),
             'api_result' => $sendRes
         ];
+
+        if (!empty($GLOBALS['waec_latest_image'])) {
+            $ret['image_file']     = $GLOBALS['waec_latest_image'];
+            $ret['image_path']     = $GLOBALS['waec_latest_image'];
+        }
 
         if (!empty($GLOBALS['waec_latest_pdf'])) {
             $ret['pdf_file']       = $GLOBALS['waec_latest_pdf']['file_path'] ?? null;

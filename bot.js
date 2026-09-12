@@ -50,6 +50,25 @@ try {
     playDl = require('play-dl');
 } catch (e) {}
 
+let checkWaecWithPuppeteer = null;
+try {
+    const waecMod = require('./waec_checker');
+    checkWaecWithPuppeteer = waecMod.checkWaecWithPuppeteer;
+} catch (e) {
+    console.warn('[WAEC Checker Module Load Warning]:', e.message);
+}
+
+async function checkWaecOnline(examType, typeCode, indexNumber, examYear, serial, pin) {
+    if (checkWaecWithPuppeteer) {
+        try {
+            return await checkWaecWithPuppeteer(examType, typeCode, indexNumber, examYear, serial, pin);
+        } catch (e) {
+            console.error('[checkWaecOnline Error]:', e.message);
+        }
+    }
+    return `❌ *WAEC Online Check*: Browser automation engine is unavailable on this server. Please check your result directly at: https://ghana.waecdirect.org/`;
+}
+
 let cachedScClientId = null;
 let lastScCidFetch = 0;
 
@@ -1100,7 +1119,7 @@ async function handleCustomerInteractiveSession(phone, text, name) {
     // 2. Trigger "2" / "check result" / "result checker" / "checker"
     if (lower === '2' || lower === '2.' || ['check result', 'result', 'results', 'waec', 'checker', 'result checker'].includes(lower)) {
         customerSessions.set(phone, { step: 'waec_exam_type', data: {}, timestamp: now });
-        return `*WAEC Result Checker — WASSCE & BECE Guide*\n━━━━━━━━━━━━━━━━━━━━━\nHere is how to buy Result Checker cards and check your WASSCE or BECE results online:\n\n*Where to Buy Result Checker Cards*:\nBuy genuine WASSCE & BECE checker cards with instant card PIN & serial delivery via:\n1. *Apex Prime Digital Store*:\n   https://apexprime.club/digital_store\n2. *Instant Payroute Direct Link (MoMo / Card)*:\n   https://payroute.name/mr-nipah\n\n━━━━━━━━━━━━━━━━━━━━━\n*Steps to Check WASSCE Results Online*:\n1. Go to: https://ghana.waecdirect.org/\n2. Enter your 10-digit *Index Number* (e.g. \`0010101001\`)\n3. Select Exam Type: *W.A.S.S.C.E. (School)* or *(Private)*\n4. Select Exam Year (e.g. *2024*)\n5. Enter your *Card Serial Number* (e.g. \`WSC12345678\`)\n6. Enter your 12-digit *Card PIN*\n7. Click *Submit* to view and print your result slip!\n\n━━━━━━━━━━━━━━━━━━━━━\n*Steps to Check BECE Results Online*:\n1. Go to: https://ghana.waecdirect.org/\n2. Enter your 10-digit *Index Number* (e.g. \`0010101001\`)\n3. Select Exam Type: *B.E.C.E. (School)* or *(Private)*\n4. Select Exam Year (e.g. *2024*)\n5. Enter your *Card Serial Number* (e.g. \`BCE12345678\`)\n6. Enter your 12-digit *Card PIN*\n7. Click *Submit* to view and print your result slip!\n\n━━━━━━━━━━━━━━━━━━━━━\n*Check Result in WhatsApp*:\nReply *wassce* or *bece* to let our bot check your result and calculate your aggregates automatically right here!\n• Reply *my pins* to view checker cards purchased on this number\n• Reply *menu* to return to the main menu`;
+        return `*WAEC Result Checker — WASSCE & BECE Guide*\n━━━━━━━━━━━━━━━━━━━━━\nHere is how to buy Result Checker cards and check your WASSCE or BECE results online:\n\n*Where to Buy Result Checker Cards*:\nBuy genuine WASSCE & BECE checker cards with instant card PIN & serial delivery via:\n1. *Apex Prime Digital Store*:\n   https://apexprime.club/digital_store\n2. *Instant Payroute Direct Link (MoMo / Card)*:\n   https://payroute.name/mr-nipah\n\n━━━━━━━━━━━━━━━━━━━━━\n*Steps to Check WASSCE Results Online*:\n1. Go to: https://ghana.waecdirect.org/\n2. Enter your 10-digit *Index Number* (e.g. \`0010101001\`)\n3. Select Exam Type: *W.A.S.S.C.E. (School)* or *(Private)*\n4. Select Exam Year (e.g. *2024*)\n5. Enter your *Card Serial Number* (e.g. \`WSC12345678\`)\n6. Enter your 12-digit *Card PIN*\n7. Click *Submit* to view and print your result slip!\n\n━━━━━━━━━━━━━━━━━━━━━\n*Steps to Check BECE Results Online*:\n1. Go to: https://eresults.waecgh.org/\n2. Enter your 10-digit *Index Number* (e.g. \`0010101001\`)\n3. Select Exam Type: *B.E.C.E. (School)* or *(Private)*\n4. Select Exam Year (e.g. *2024*)\n5. Enter your *Card Serial Number* (e.g. \`BCE12345678\`)\n6. Enter your 12-digit *Card PIN*\n7. Click *Submit* to view and print your result slip!\n\n━━━━━━━━━━━━━━━━━━━━━\n*Check Result in WhatsApp*:\nReply *wassce* or *bece* to let our bot check your result and calculate your aggregates automatically right here!\n• Reply *my pins* to view checker cards purchased on this number\n• Reply *menu* to return to the main menu`;
     }
 
     // 3. Trigger "3" / "check status" / "track" / "status"
@@ -1291,6 +1310,9 @@ async function processMessageViaBridge(phone, text, name) {
     try {
         const interactiveReply = await handleCustomerInteractiveSession(phone, text, name);
         if (interactiveReply) {
+            if (typeof interactiveReply === 'object') {
+                return { handled: true, ...interactiveReply };
+            }
             return { handled: true, reply: interactiveReply };
         }
     } catch (e) {
@@ -2664,7 +2686,19 @@ async function startBot() {
 
             if (reply) {
                 try {
-                    await sock.sendMessage(from, { text: reply }, { quoted: msg });
+                    const resultImg = bridgeRes?.image_file || bridgeRes?.image_path;
+                    if (resultImg && fs.existsSync(resultImg)) {
+                        try {
+                            const imgBuf = fs.readFileSync(resultImg);
+                            await sock.sendMessage(from, { image: imgBuf, caption: reply }, { quoted: msg });
+                            console.log(`[Result Screenshot Sent] -> To: ${senderPhone} (${resultImg})`);
+                        } catch (imgErr) {
+                            console.error('[Error sending result image, falling back to text]:', imgErr.message);
+                            await sock.sendMessage(from, { text: reply }, { quoted: msg });
+                        }
+                    } else {
+                        await sock.sendMessage(from, { text: reply }, { quoted: msg });
+                    }
                     try { await sock.sendPresenceUpdate('paused', from); } catch (e) {}
                     console.log(`[Reply Sent] -> To: ${senderPhone}`);
 
