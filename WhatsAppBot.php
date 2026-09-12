@@ -1035,20 +1035,6 @@ class WhatsAppBot {
             }
         }
 
-        // 4. Offline development test user fallback
-        if ($userId === 317) {
-            return [
-                'id'             => 317,
-                'username'       => 'MrNipah',
-                'phone'          => '0559623850',
-                'email'          => 'data4ghana1@gmail.com',
-                'wallet_balance' => 2.40,
-                'afa_balance'    => 10,
-                'role'           => 'elite',
-                'payment_ref'    => '348'
-            ];
-        }
-
         return null;
     }
 

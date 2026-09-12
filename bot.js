@@ -519,31 +519,29 @@ setInterval(watchPairingRequests, 1500);
  * Query website backend database API (https://apexprime.club/api.php)
  */
 function callWebsiteApi(dataObj) {
-    const cleanSearch = String(dataObj?.search || '').replace(/[^\w]/g, '').toLowerCase();
-    const is317 = cleanSearch === '317' || cleanSearch === 'apex317' || cleanSearch === 'apex_317';
-
     return new Promise(async (resolve) => {
-        const payload = JSON.stringify({
-            action: 'bot_query',
-            bot_secret: 'ApexPrimeBot_2026',
-            ...dataObj
+        const sslAgent = new https.Agent({
+            rejectUnauthorized: false,
+            keepAlive: true
         });
 
-        const tryEndpoint = (targetUrl, postData) => {
+        const postForm = (urlStr, params) => {
             return new Promise((resResolve) => {
                 try {
-                    const urlObj = new URL(targetUrl);
+                    const u = new URL(urlStr);
+                    const postData = querystring.stringify(params);
                     const req = https.request({
-                        hostname: urlObj.hostname,
+                        hostname: u.hostname,
                         port: 443,
-                        path: urlObj.pathname + urlObj.search,
+                        path: u.pathname + u.search,
                         method: 'POST',
+                        agent: sslAgent,
                         timeout: 15000,
                         headers: {
-                            'Content-Type': 'application/json',
-                            'Accept': 'application/json, text/plain, */*',
-                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 ApexPrimeBot/2.0',
-                            'Content-Length': Buffer.byteLength(postData)
+                            'Content-Type': 'application/x-www-form-urlencoded',
+                            'Content-Length': Buffer.byteLength(postData),
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ApexPrimeBot/2.0',
+                            'Accept': 'application/json, text/plain, */*'
                         }
                     }, (res) => {
                         let data = '';
@@ -558,7 +556,7 @@ function callWebsiteApi(dataObj) {
                         });
                     });
                     req.on('error', (err) => {
-                        console.error(`[Website API Error ${urlObj.pathname}]:`, err.message);
+                        console.error(`[Website API Error ${u.pathname}]:`, err.message);
                         resResolve(null);
                     });
                     req.on('timeout', () => {
@@ -573,38 +571,25 @@ function callWebsiteApi(dataObj) {
             });
         };
 
-        // Try primary endpoint: api.php
-        let result = await tryEndpoint('https://apexprime.club/api.php', payload);
+        // 1. Primary endpoint: api.php
+        const primaryParams = {
+            action: 'bot_query',
+            bot_secret: 'ApexPrimeBot_2026',
+            ...dataObj
+        };
+        let result = await postForm('https://apexprime.club/api.php', primaryParams);
 
-        // If primary endpoint didn't succeed and it is a user lookup, try secondary webhook endpoint
+        // 2. Secondary fallback endpoint: webhook_whatsapp.php (for lookup_user)
         if ((!result || !result.success) && dataObj.op === 'lookup_user') {
-            const fallbackPayload = JSON.stringify({
+            const fallbackParams = {
                 bot_action: 'lookup_user',
                 bot_secret: 'ApexPrimeBot_2026',
                 search: dataObj.search || ''
-            });
-            const fallbackRes = await tryEndpoint('https://apexprime.club/webhook_whatsapp.php?bot_action=lookup_user', fallbackPayload);
+            };
+            const fallbackRes = await postForm('https://apexprime.club/webhook_whatsapp.php', fallbackParams);
             if (fallbackRes && fallbackRes.success) {
                 result = fallbackRes;
             }
-        }
-
-        // Dedicated verified fallback for developer / owner account 317 (MrNipah)
-        if ((!result || !result.success || !result.user) && dataObj.op === 'lookup_user' && is317) {
-            return resolve({
-                success: true,
-                message: 'User found in website database (verified fallback)',
-                user: {
-                    id: 317,
-                    username: 'MrNipah',
-                    phone: '0559623850',
-                    email: 'data4ghana1@gmail.com',
-                    wallet_balance: '2.40',
-                    afa_balance: 10,
-                    role: 'elite',
-                    payment_ref: '348'
-                }
-            });
         }
 
         resolve(result);
@@ -2575,6 +2560,19 @@ const server = http.createServer(async (req, res) => {
             pairing_code: activePairingCode,
             pairing_phone: activePairingPhone
         }));
+    }
+
+    // Diagnostic endpoint to test live website database sync from Render
+    if (urlPath.endsWith('/api/test-db') || urlPath.endsWith('/test-db')) {
+        const fullUrl = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
+        const searchCode = fullUrl.searchParams.get('search') || '317';
+        const testRes = await callWebsiteApi({ op: 'lookup_user', search: searchCode });
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify({
+            status: 'online',
+            search_tested: searchCode,
+            result: testRes
+        }, null, 2));
     }
 
     // POST /api/request-pairing-code (Alexa Covert Pairing Endpoint)
