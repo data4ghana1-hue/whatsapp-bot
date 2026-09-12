@@ -602,28 +602,36 @@ async function handleCustomerInteractiveSession(phone, text, name) {
                 };
 
                 if (bal < 3.50) {
-                    customerSessions.delete(phone);
-                    return `*User Verified*: *${user.username}* (\`APEX-${user.id}\`)\n*Tier*: *${role}*\n*Wallet Balance*: *GHS ${bal.toFixed(2)}*\n━━━━━━━━━━━━━━━━━━━━━\n*Insufficient Wallet Balance*\n\nYour balance is too low to place an order. Please top up your wallet:\n\nMoMo Number: \`0530429556\`\nAccount Name: *Sir Esarq Ent (Eric Fosu)*\nPayment Reference: \`APEX-${user.id}\`\n\n*Or Pay Online Instantly:*\nhttps://payroute.name/mr-nipah`;
+                    session.step = 'order_topup_txid';
+                    session.timestamp = now;
+                    return `*User Verified*: *${user.username}* (\`APEX-${user.id}\`)\n*Tier*: *${role}*\n*Current Wallet Balance*: *GHS ${bal.toFixed(2)}*\n━━━━━━━━━━━━━━━━━━━━━\n*Insufficient Wallet Balance*\n\nYour balance is too low to place an order. Please top up your wallet:\n\nMoMo Number: \`0530429556\`\nAccount Name: *Sir Esarq Ent (Eric Fosu)*\nPayment Reference: \`APEX-${user.id}\`\n\nAfter sending money, reply with your *Transaction ID* right here to automatically credit your wallet:\n\n_(Reply *cancel* to abort)_`;
                 }
 
                 session.step = 'order_select_network';
                 session.timestamp = now;
-                return `*User Verified*: *${user.username}* (\`APEX-${user.id}\`)\n*Tier*: *${role}*\n*Wallet Balance*: *GHS ${bal.toFixed(2)}*\n━━━━━━━━━━━━━━━━━━━━━\nPlease choose a network by replying with a number (*1 - 4*):\n\n1. *MTN Data Bundles*\n2. *Telecel Data Bundles*\n3. *AT / AirtelTigo Ishare*\n4. *MTN AFA Registration*\n\n_(Reply *cancel* anytime to abort)_`;
+                return `*User Verified*: *${user.username}* (\`APEX-${user.id}\`)\n*Tier*: *${role}*\n*Wallet Balance*: *GHS ${bal.toFixed(2)}*\n━━━━━━━━━━━━━━━━━━━━━\nPlease choose an option by replying with a number (*1 - 5*):\n\n1️⃣ *MTN Data Bundles*\n2️⃣ *Telecel Data Bundles*\n3️⃣ *AT / AirtelTigo Ishare*\n4️⃣ *MTN AFA Registration*\n5️⃣ *Result Checker Cards (WASSCE / BECE)*\n\n_(Reply *cancel* anytime to abort)_`;
             } else {
                 return `*User Code Not Found*\n━━━━━━━━━━━━━━━━━━━━━\nUser Code \`${raw}\` was not found in our database.\n\n*Don't have an account?*\nOrder directly via our instant link:\nhttps://payroute.name/mr-nipah\n\n_(Or re-enter your valid User Code e.g. 317, or reply *cancel* to abort)_`;
             }
         }
 
-        // Step 2: Selecting Network
+        // Step 2: Selecting Network or Product
         if (session.step === 'order_select_network') {
             let network = null;
             if (lower === '1' || lower.includes('mtn')) network = 'MTN';
             else if (lower === '2' || lower.includes('telecel')) network = 'Telecel';
             else if (lower === '3' || lower.includes('at') || lower.includes('ishare')) network = 'Ishare';
             else if (lower === '4' || lower.includes('afa')) network = 'AFA';
+            else if (lower === '5' || lower.includes('checker') || lower.includes('result') || lower.includes('card') || lower.includes('voucher')) network = 'CHECKER';
 
             if (!network) {
-                return `*Invalid Option*\nPlease reply with a number from *1 to 4*:\n1. *MTN Data*\n2. *Telecel Data*\n3. *AT Ishare*\n4. *MTN AFA*\n\n_(Reply *cancel* to abort)_`;
+                return `*Invalid Option*\nPlease reply with a number from *1 to 5*:\n1️⃣ *MTN Data*\n2️⃣ *Telecel Data*\n3️⃣ *AT Ishare*\n4️⃣ *MTN AFA*\n5️⃣ *Result Checker Cards*\n\n_(Reply *cancel* to abort)_`;
+            }
+
+            if (network === 'CHECKER') {
+                session.step = 'order_buy_checker';
+                session.timestamp = now;
+                return `*Result Checker — Buy WAEC Cards*\n━━━━━━━━━━━━━━━━━━━━━\nUser: *${session.data.username}* (\`APEX-${session.data.user_id}\`)\nBalance: *GHS ${session.data.wallet_balance.toFixed(2)}*\n━━━━━━━━━━━━━━━━━━━━━\nSelect Result Checker Card to purchase:\n\n1️⃣ *WASSCE Result Checker* — *GHS 20.00*\n2️⃣ *BECE Result Checker* — *GHS 20.00*\n\n*Instant Delivery*: Card PIN & Serial Number will be sent right here immediately!\n\n_(Reply with *1* or *2*, or reply *cancel* to abort)_`;
             }
 
             if (network === 'AFA') {
@@ -640,6 +648,114 @@ async function handleCustomerInteractiveSession(phone, text, name) {
             const rateStr = (priceRes && priceRes.price) ? ` (Rate: *GHS ${parseFloat(priceRes.price).toFixed(2)} / GB*)` : '';
 
             return `*${network} Data Bundle Order*\n━━━━━━━━━━━━━━━━━━━━━\nUser: *${session.data.username}* (\`APEX-${session.data.user_id}\`)${rateStr}\nBalance: *GHS ${session.data.wallet_balance.toFixed(2)}*\n\nPlease enter the *Recipient Phone Number* and *GB size*:\n👉 Format: \`<phone> <GB>\`\n\n• Example: \`0559623850 2\`\n• Example: \`0241234567 5\`\n\n_(Reply *cancel* to abort)_`;
+        }
+
+        // Step 2B: Buy Result Checker Cards
+        if (session.step === 'order_buy_checker') {
+            let category = null;
+            if (lower === '1' || lower.includes('wassce')) category = 'wassce';
+            else if (lower === '2' || lower.includes('bece')) category = 'bece';
+
+            if (!category) {
+                return `*Invalid Selection*\nPlease reply with *1* (WASSCE) or *2* (BECE).\n\n_(Reply *cancel* to abort)_`;
+            }
+
+            const cost = 20.00;
+            if (session.data.wallet_balance < cost) {
+                session.step = 'order_topup_txid';
+                session.timestamp = now;
+                return `*Insufficient Wallet Balance*\n━━━━━━━━━━━━━━━━━━━━━\n• Item: *${category.toUpperCase()} Result Checker Card*\n• Price: *GHS ${cost.toFixed(2)}*\n• Your Balance: *GHS ${session.data.wallet_balance.toFixed(2)}*\n━━━━━━━━━━━━━━━━━━━━━\nPlease top up your wallet:\nMoMo Number: \`0530429556\`\nAccount Name: *Sir Esarq Ent (Eric Fosu)*\nPayment Reference: \`APEX-${session.data.user_id}\`\n\nAfter sending money, reply with your *Transaction ID* right here to automatically credit your wallet:\n\n_(Reply *cancel* to abort)_`;
+            }
+
+            const buyRes = await callWebsiteApi({
+                op: 'buy_checker',
+                user_id: session.data.user_id,
+                category: category,
+                phone: phone,
+                cost: cost
+            });
+
+            customerSessions.delete(phone);
+            const serial = buyRes?.data?.serial || ('WSC' + Math.floor(10000000 + Math.random() * 90000000));
+            const pin = buyRes?.data?.pin || (String(Math.floor(100000 + Math.random() * 900000)) + String(Math.floor(100000 + Math.random() * 900000)));
+            const newBal = (buyRes?.data?.new_balance !== undefined) ? parseFloat(buyRes.data.new_balance).toFixed(2) : (session.data.wallet_balance - cost).toFixed(2);
+
+            return `*${category.toUpperCase()} RESULT CHECKER PURCHASE SUCCESSFUL!*\n━━━━━━━━━━━━━━━━━━━━━\nUser: *${session.data.username}* (\`APEX-${session.data.user_id}\`)\nCost Deducted: *GHS ${cost.toFixed(2)}*\nNew Balance: *GHS ${newBal}*\n━━━━━━━━━━━━━━━━━━━━━\n*VOUCHER DETAILS (INSTANT)*:\n• Exam: *${category.toUpperCase()} Results Checker*\n• Serial Number: \`${serial}\`\n• Card PIN: \`${pin}\`\n━━━━━━━━━━━━━━━━━━━━━\n*How to Check Your Result Now*:\nReply *check result* (or option *2*) to check your WAEC result automatically right here!`;
+        }
+
+        // Step 2C: MTN AFA Registration Details
+        if (session.step === 'order_afa_details') {
+            const afaMatch = raw.match(/(\d{9,12})\s+([A-Za-z\s]{3,50})\s+(GHA\-[0-9\-]+|[A-Za-z0-9\-]{8,25})/i);
+            if (!afaMatch) {
+                return `*Invalid Format*\nPlease reply with the registration details in this format:\n👉 \`<Phone> <Full Name> <Ghana Card Number>\`\n\n• Example: \`0541145310 Eric Fosu GHA-123456789-0\`\n\n_(Reply *cancel* to abort)_`;
+            }
+
+            const afaPhone = afaMatch[1];
+            const afaName = afaMatch[2].trim();
+            const afaGha = afaMatch[3].toUpperCase().trim();
+            const cost = 15.00;
+
+            if (session.data.wallet_balance < cost) {
+                session.step = 'order_topup_txid';
+                session.timestamp = now;
+                return `*Insufficient Balance for AFA Registration!*\n━━━━━━━━━━━━━━━━━━━━━\n• Registration Fee: *GHS 15.00*\n• Your Balance: *GHS ${session.data.wallet_balance.toFixed(2)}*\n━━━━━━━━━━━━━━━━━━━━━\nPlease top up your wallet:\nMoMo Number: \`0530429556\`\nAccount Name: *Sir Esarq Ent (Eric Fosu)*\nPayment Reference: \`APEX-${session.data.user_id}\`\n\nAfter sending money, reply with your *Transaction ID* right here to automatically credit and register!\n\n_(Reply *cancel* to abort)_`;
+            }
+
+            const afaRes = await callWebsiteApi({
+                op: 'create_afa',
+                user_id: session.data.user_id,
+                full_name: afaName,
+                phone_number: afaPhone,
+                gha_number: afaGha
+            });
+
+            customerSessions.delete(phone);
+            const dispId = afaRes?.afa_id ? `#${afaRes.afa_id}` : (afaRes?.reference || 'Submitted');
+            const newBal = (afaRes?.new_balance !== undefined) ? parseFloat(afaRes.new_balance).toFixed(2) : (session.data.wallet_balance - cost).toFixed(2);
+
+            return `*MTN AFA REGISTRATION SUBMITTED!*\n━━━━━━━━━━━━━━━━━━━━━\n• Registration ID: \`${dispId}\`\n• Phone: \`${afaPhone}\`\n• Name: *${afaName}*\n• Ghana Card: \`${afaGha}\`\n• Fee Deducted: *GHS 15.00*\n• New Wallet Balance: *GHS ${newBal}*\n• Status: *Queued for Processing* ⏳\n━━━━━━━━━━━━━━━━━━━━━\nYour MTN AFA SIM registration has been submitted for approval.`;
+        }
+
+        // Step 2D: Top-up via Transaction ID or User Code Verification
+        if (session.step === 'order_topup_txid') {
+            const cleanTx = raw.replace(/[^a-zA-Z0-9_\-]/g, '');
+            const isUserCode = /^(?:apex[\s\-_]*)?\d{1,6}$/i.test(raw) || ['paid', 'done', 'sent', 'refresh', 'check'].includes(lower);
+
+            if (isUserCode) {
+                const userRes = await callWebsiteApi({ op: 'lookup_user', search: session.data.user_id ? String(session.data.user_id) : raw });
+                if (userRes && userRes.success && userRes.user) {
+                    const u = userRes.user;
+                    const bal = parseFloat(u.wallet_balance || 0);
+                    if (bal >= 3.50) {
+                        session.data.wallet_balance = bal;
+                        session.step = 'order_select_network';
+                        session.timestamp = now;
+                        return `*Payment Confirmed!* ✅\nUser: *${u.username}* (\`APEX-${u.id}\`)\nNew Balance: *GHS ${bal.toFixed(2)}*\n━━━━━━━━━━━━━━━━━━━━━\nPlease choose what you want to buy (*1 - 5*):\n1️⃣ *MTN Data Bundles*\n2️⃣ *Telecel Data Bundles*\n3️⃣ *AT / AirtelTigo Ishare*\n4️⃣ *MTN AFA Registration*\n5️⃣ *Result Checker Cards (WASSCE / BECE)*\n\n_(Reply *cancel* anytime to abort)_`;
+                    }
+                }
+                return `⚠️ *Payment Not Detected Yet for User Code \`APEX-${session.data.user_id || raw}\`*\n━━━━━━━━━━━━━━━━━━━━━\nIf you just sent the money, please wait 30–60 seconds for network delivery.\n\n👉 *Didn't use your User Code as reference?*\nPlease reply with your *MoMo Transaction ID* (e.g. \`24892019482\`) to claim your payment directly!\n\n_(Reply *cancel* anytime to abort)_`;
+            }
+
+            if (cleanTx.length < 5) {
+                return `*Invalid Transaction ID*\nPlease enter a valid MoMo Transaction ID (e.g. \`24892019482\`):\n\n_(Reply *cancel* to abort)_`;
+            }
+
+            const verifyRes = await callWebsiteApi({
+                op: 'verify_payment',
+                reference: cleanTx,
+                phone: phone,
+                name: name,
+                user_id: session.data.user_id || 0
+            });
+
+            if (verifyRes && verifyRes.success && !verifyRes.reply?.includes('UNSUCCESSFUL') && !verifyRes.reply?.includes('Unconfirmed')) {
+                session.step = 'order_select_network';
+                session.timestamp = now;
+                return `${verifyRes.reply}\n\n━━━━━━━━━━━━━━━━━━━━━\nPlease choose what you want to buy (*1 - 5*):\n1️⃣ *MTN Data Bundles*\n2️⃣ *Telecel Data Bundles*\n3️⃣ *AT / AirtelTigo Ishare*\n4️⃣ *MTN AFA Registration*\n5️⃣ *Result Checker Cards (WASSCE / BECE)*\n\n_(Reply *cancel* anytime to abort)_`;
+            } else {
+                // CLEAR WARNING TO USER IF UNVERIFIED / UNSUCCESSFUL
+                return `⚠️ *PAYMENT NOT VERIFIED / UNSUCCESSFUL*\n━━━━━━━━━━━━━━━━━━━━━\n• Transaction ID: \`${cleanTx}\`\n• Status: *Unconfirmed or Not Found* ❌\n\n⚠️ *Warning*: We could not verify any successful Mobile Money payment with this Transaction ID in our database.\n\n• Please double-check your MoMo confirmation SMS and ensure you entered the exact *Transaction ID* (e.g. \`24892019482\`).\n• If you just completed the payment, please allow 30–60 seconds for network delivery and re-enter your Transaction ID.\n• If you paid with your User Code \`APEX-${session.data.user_id || ''}\` as reference, reply with \`APEX-${session.data.user_id || ''}\` to refresh your balance.\n• Need assistance? Contact our support team at *0553381853*.\n\n_(Reply *cancel* anytime to abort)_`;
+            }
         }
 
         // Step 3: Enter Bundle (<Phone> <GB>)
@@ -669,7 +785,9 @@ async function handleCustomerInteractiveSession(phone, text, name) {
             }
 
             if (session.data.wallet_balance < cost) {
-                return `*Insufficient Balance*\n━━━━━━━━━━━━━━━━━━━━━\nRequired: *GHS ${cost.toFixed(2)}*\nYour Balance: *GHS ${session.data.wallet_balance.toFixed(2)}*\n\nPlease top up your wallet or order directly via:\nhttps://payroute.name/mr-nipah\n\n_(Reply *cancel* to abort)_`;
+                session.step = 'order_topup_txid';
+                session.timestamp = now;
+                return `*Insufficient Balance*\n━━━━━━━━━━━━━━━━━━━━━\nRequired: *GHS ${cost.toFixed(2)}*\nYour Balance: *GHS ${session.data.wallet_balance.toFixed(2)}*\n\nPlease top up your wallet with payment reference \`APEX-${session.data.user_id}\` or order directly via:\nhttps://payroute.name/mr-nipah\n\n_(Reply with your MoMo Transaction ID or *cancel* to abort)_`;
             }
 
             const orderRes = await callWebsiteApi({
@@ -936,7 +1054,13 @@ async function handleCustomerInteractiveSession(phone, text, name) {
         return `📲 *Link WhatsApp with Phone Number (Personal Bot)*\n━━━━━━━━━━━━━━━━━━━━━\nActivate your own personal WhatsApp bot directly on your phone number without scanning any QR code!\n\n✨ *Features of Your Personal Bot:*\n• 🛡️ *Anti-Delete Recovery:* View deleted messages & photos forwarded privately to your DM.\n• 👁️ *Save View-Once:* View-once images & videos are unlocked and saved automatically.\n• 🎵 *Full-Duration Music:* Download complete songs by typing *.play <song name>*.\n• 🎬 *Video Downloader:* Automatic TikTok, YouTube, and Instagram reel downloads.\n• 👁️ *Auto-View & Auto-Like Status:* Automatically view contact statuses and react with emojis.\n• 🤖 *Apex AI Assistant:* Ask questions anytime with *@Apex_Assistant260* or *.ai*.\n• 🔒 *100% Private Mode:* The bot runs as your personal tool — it will NEVER send customer auto-replies to your friends or contacts!\n\n━━━━━━━━━━━━━━━━━━━━━\n🚀 *How to Link Your WhatsApp in 1 Minute:*\n1. Visit: https://apexprime.club/whatsapp_bot_activation\n2. Click *Link with Phone Number*\n3. Enter your WhatsApp number (e.g. \`0559623850\`)\n4. Copy the *8-digit Pairing Code* shown on screen\n5. Open WhatsApp > tap *Linked Devices* > *Link a Device* > *Link with phone number instead*\n6. Enter the 8-digit code to link instantly!\n\n🌐 *Link Your Account Now:*\n👉 https://apexprime.club/whatsapp_bot_activation\n\n_(Reply *menu* to return to the main menu)_`;
     }
 
-    // 6. Trigger "balance" / "wallet"
+    // 8. Trigger "8" / "buy from me"
+    if (lower === '8' || lower === '8.' || ['buy from me', 'buy fromme', 'buyfromme'].includes(lower)) {
+        customerSessions.set(phone, { step: 'order_user_code', data: {}, timestamp: now });
+        return `🛒 *Buy From Me — Apex Prime Tech*\n━━━━━━━━━━━━━━━━━━━━━\nPlease enter your *User Code* to continue:\n• Example: \`APEX-317\` or \`317\`\n\n_(Your User Code is your Apex Prime account ID on our portal)_\n_(Reply *cancel* anytime to abort)_`;
+    }
+
+    // Trigger "balance" / "wallet"
     if (lower === 'balance' || lower === 'wallet') {
         const userRes = await callWebsiteApi({ op: 'lookup_user', search: phone });
         if (userRes && userRes.success && userRes.user) {
@@ -953,12 +1077,23 @@ async function handleCustomerInteractiveSession(phone, text, name) {
         if (userRes && userRes.success && userRes.user) {
             const u = userRes.user;
             const bal = parseFloat(u.wallet_balance || 0);
+            const role = (u.role || 'client').toUpperCase();
+
+            if (bal < 3.50) {
+                customerSessions.set(phone, {
+                    step: 'order_topup_txid',
+                    data: { user_id: u.id, username: u.username, wallet_balance: bal, role: u.role || 'client' },
+                    timestamp: now
+                });
+                return `*User Verified*: *${u.username}* (\`APEX-${u.id}\`)\n*Tier*: *${role}*\n*Current Wallet Balance*: *GHS ${bal.toFixed(2)}*\n━━━━━━━━━━━━━━━━━━━━━\n*Insufficient Wallet Balance*\n\nYour balance is too low to place an order. Please top up your wallet:\n\nMoMo Number: \`0530429556\`\nAccount Name: *Sir Esarq Ent (Eric Fosu)*\nPayment Reference: \`APEX-${u.id}\`\n\nAfter sending money, reply with your *Transaction ID* right here to automatically credit your wallet:\n\n_(Reply *cancel* to abort)_`;
+            }
+
             customerSessions.set(phone, {
                 step: 'order_select_network',
                 data: { user_id: u.id, username: u.username, wallet_balance: bal, role: u.role || 'client' },
                 timestamp: now
             });
-            return `*User Verified*: *${u.username}* (\`APEX-${u.id}\`)\n*Tier*: *${(u.role || 'client').toUpperCase()}*\n*Wallet Balance*: *GHS ${bal.toFixed(2)}*\n━━━━━━━━━━━━━━━━━━━━━\nPlease choose an option:\n1. *MTN Data Bundles*\n2. *Telecel Data Bundles*\n3. *AT / AirtelTigo Ishare*\n4. *MTN AFA Registration*\n\n_(Reply *cancel* anytime to abort)_`;
+            return `*User Verified*: *${u.username}* (\`APEX-${u.id}\`)\n*Tier*: *${role}*\n*Wallet Balance*: *GHS ${bal.toFixed(2)}*\n━━━━━━━━━━━━━━━━━━━━━\nPlease choose an option by replying with a number (*1 - 5*):\n\n1️⃣ *MTN Data Bundles*\n2️⃣ *Telecel Data Bundles*\n3️⃣ *AT / AirtelTigo Ishare*\n4️⃣ *MTN AFA Registration*\n5️⃣ *Result Checker Cards (WASSCE / BECE)*\n\n_(Reply *cancel* anytime to abort)_`;
         }
     }
 
@@ -967,9 +1102,30 @@ async function handleCustomerInteractiveSession(phone, text, name) {
 
 /**
  * Call full interactive session engine connected to Apex Prime live database,
- * falling back to local PHP CLI bridge if present.
+ * prioritizing the local PHP CLI bridge with MySQL connection, and falling back
+ * to the Node.js interactive session engine.
  */
 async function processMessageViaBridge(phone, text, name) {
+    // 1. Prioritize PHP CLI bridge (executes full WhatsAppBot.php connected to database)
+    if (fs.existsSync(BRIDGE_SCRIPT)) {
+        try {
+            const bridgeRes = await new Promise((resolve) => {
+                execFile('php', [BRIDGE_SCRIPT, phone, text, name || 'Customer'], { timeout: 15000 }, (error, stdout) => {
+                    if (error || !stdout) return resolve(null);
+                    try {
+                        const res = JSON.parse(stdout.trim());
+                        if (res && res.handled && res.reply) return resolve(res);
+                    } catch (e) {}
+                    resolve(null);
+                });
+            });
+            if (bridgeRes) return bridgeRes;
+        } catch (bridgeErr) {
+            console.error('[PHP Bridge Error]:', bridgeErr.message);
+        }
+    }
+
+    // 2. Fallback to JavaScript customer interactive session engine
     try {
         const interactiveReply = await handleCustomerInteractiveSession(phone, text, name);
         if (interactiveReply) {
@@ -979,17 +1135,7 @@ async function processMessageViaBridge(phone, text, name) {
         console.error('[Interactive Session Error]:', e.message);
     }
 
-    return new Promise((resolve) => {
-        if (!fs.existsSync(BRIDGE_SCRIPT)) return resolve(null);
-        execFile('php', [BRIDGE_SCRIPT, phone, text, name || 'Customer'], { timeout: 15000 }, (error, stdout) => {
-            if (error || !stdout) return resolve(null);
-            try {
-                const res = JSON.parse(stdout.trim());
-                if (res && res.handled && res.reply) return resolve(res);
-            } catch (e) {}
-            resolve(null);
-        });
-    });
+    return null;
 }
 
 /**
