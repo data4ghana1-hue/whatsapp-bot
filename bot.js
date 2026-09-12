@@ -50,6 +50,14 @@ try {
     playDl = require('play-dl');
 } catch (e) {}
 
+let m3u8stream = null;
+try {
+    m3u8stream = require('m3u8stream');
+} catch (e) {}
+
+const OFFICIAL_STORE_NUMBERS = ['233553381853', '0553381853', '233541145310', '0541145310'];
+const CONNECTED_ACCOUNTS_FILE = path.resolve(__dirname, 'connected_accounts.json');
+
 let cachedScClientId = null;
 let lastScCidFetch = 0;
 
@@ -69,79 +77,185 @@ async function getSoundCloudClientId() {
     return cachedScClientId || 'Pb72ranhoyt6gw7hM7TkzUItXlMWSNSo';
 }
 
+function downloadHlsStream(playlistUrl) {
+    return new Promise((resolve, reject) => {
+        if (m3u8stream) {
+            try {
+                const stream = m3u8stream(playlistUrl);
+                const chunks = [];
+                stream.on('data', chunk => chunks.push(chunk));
+                stream.on('end', () => resolve(Buffer.concat(chunks)));
+                stream.on('error', err => reject(err));
+                return;
+            } catch (e) {}
+        }
+        fetchBuffer(playlistUrl).then(async (playlistBuf) => {
+            try {
+                const text = playlistBuf.toString('utf8');
+                const lines = text.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+                if (!lines.length) return reject(new Error('Empty m3u8 playlist'));
+                const segmentBuffers = [];
+                for (const segUrl of lines) {
+                    const fullSegUrl = segUrl.startsWith('http') ? segUrl : new URL(segUrl, playlistUrl).toString();
+                    const segBuf = await fetchBuffer(fullSegUrl);
+                    if (segBuf) segmentBuffers.push(segBuf);
+                }
+                resolve(Buffer.concat(segmentBuffers));
+            } catch (err) {
+                reject(err);
+            }
+        }).catch(reject);
+    });
+}
+
 /**
- * Searches and downloads 100% FULL SONG audio (never 29-second previews)
+ * Searches and downloads 100% FULL SONG audio worldwide (never 29-second previews)
+ * Enriched with Deezer catalog metadata and dual progressive/HLS streaming.
  */
 async function downloadFullSong(query) {
     const cid = await getSoundCloudClientId();
-    if (!cid) throw new Error('Music search engine unavailable');
+    if (!cid) throw new Error('SoundCloud engine unavailable');
 
-    const searchUrl = `https://api-v2.soundcloud.com/search/tracks?q=${encodeURIComponent(query)}&client_id=${cid}&limit=15`;
-    const searchRes = await fetchJson(searchUrl, {
-        headers: {
-            'Referer': 'https://soundcloud.com/',
-            'Origin': 'https://soundcloud.com'
+    // 1. Catalog enrichment via Deezer Search API
+    let deezerMeta = null;
+    try {
+        const dRes = await fetchJson(`https://api.deezer.com/search?q=${encodeURIComponent(query)}&limit=1`, { timeout: 8000 });
+        if (dRes?.data?.[0]) {
+            const tr = dRes.data[0];
+            deezerMeta = {
+                title: tr.title,
+                artist: tr.artist?.name,
+                duration: tr.duration,
+                cover: tr.album?.cover_xl || tr.album?.cover_big || tr.album?.cover_medium
+            };
         }
+    } catch (e) {}
+
+    const searchQueries = [query];
+    if (deezerMeta && deezerMeta.artist && deezerMeta.title) {
+        searchQueries.unshift(`${deezerMeta.artist} ${deezerMeta.title}`);
+    }
+
+    let allTracks = [];
+    for (const sq of searchQueries) {
+        try {
+            const searchUrl = `https://api-v2.soundcloud.com/search/tracks?q=${encodeURIComponent(sq)}&client_id=${cid}&limit=20`;
+            const sRes = await fetchJson(searchUrl, {
+                headers: {
+                    'Referer': 'https://soundcloud.com/',
+                    'Origin': 'https://soundcloud.com'
+                },
+                timeout: 10000
+            });
+            const list = sRes?.collection || sRes?.data?.collection || [];
+            allTracks.push(...list);
+            if (allTracks.length >= 20) break;
+        } catch (e) {}
+    }
+
+    const seen = new Set();
+    const tracks = allTracks.filter(t => {
+        if (!t?.id || seen.has(t.id)) return false;
+        seen.add(t.id);
+        return true;
     });
 
-    const tracks = searchRes?.collection || searchRes?.data?.collection || [];
-    if (!tracks || !tracks.length) return null;
+    if (!tracks.length) return null;
 
     const wantsRemix = /\b(remix|slowed|reverb|speed|cover|instrumental)\b/i.test(query);
 
-    // Score candidates: prioritize true full tracks (60s to 900s)
     const candidates = [];
     for (const t of tracks) {
         const durationSec = Math.round((t.duration || 0) / 1000);
-        // Skip snippet previews (< 60s) or excessively long mixes (> 15 mins)
         if (durationSec < 60 || durationSec > 900) continue;
 
         const transcodings = t.media?.transcodings || [];
         const progressive = transcodings.find(tc => tc.format?.protocol === 'progressive' && !tc.snipped);
-        if (!progressive) continue;
+        const hls = transcodings.find(tc => tc.format?.protocol === 'hls' && !tc.snipped && (tc.format?.mime_type?.includes('mpeg') || tc.format?.mime_type?.includes('mp4')));
+
+        if (!progressive && !hls) continue;
 
         let score = 0;
         const titleLower = (t.title || '').toLowerCase();
         const isModifier = /\b(remix|slowed|reverb|cover|instrumental|sped up)\b/i.test(titleLower);
 
-        // Prefer standard full song duration (90s - 420s)
-        if (durationSec >= 90 && durationSec <= 420) score += 50;
+        // Closeness to official track duration
+        if (deezerMeta?.duration) {
+            const diff = Math.abs(durationSec - deezerMeta.duration);
+            if (diff <= 15) score += 80;
+            else if (diff <= 35) score += 50;
+            else if (diff <= 60) score += 20;
+        } else if (durationSec >= 90 && durationSec <= 420) {
+            score += 50;
+        }
+
         if (!wantsRemix && !isModifier) score += 40;
         if (wantsRemix && isModifier) score += 40;
+        if (t.user?.verified) score += 15;
+        if (progressive) score += 10;
 
-        candidates.push({ track: t, progressive, score, durationSec });
+        candidates.push({ track: t, progressive, hls, score, durationSec });
     }
 
     candidates.sort((a, b) => b.score - a.score);
 
     for (const c of candidates) {
-        try {
-            const streamInfo = await fetchJson(`${c.progressive.url}?client_id=${cid}`, {
-                headers: {
-                    'Referer': 'https://soundcloud.com/',
-                    'Origin': 'https://soundcloud.com'
+        // Try progressive first
+        if (c.progressive) {
+            try {
+                const streamInfo = await fetchJson(`${c.progressive.url}?client_id=${cid}`, {
+                    headers: { 'Referer': 'https://soundcloud.com/', 'Origin': 'https://soundcloud.com' },
+                    timeout: 10000
+                });
+                const audioUrl = streamInfo?.url || streamInfo?.data?.url;
+                if (audioUrl) {
+                    const audioBuf = await fetchBuffer(audioUrl, { timeout: 60000 });
+                    if (audioBuf && audioBuf.length > 500000) {
+                        const t = c.track;
+                        const finalTitle = deezerMeta?.title || t.title || query;
+                        const finalArtist = deezerMeta?.artist || t.user?.username || 'Artist';
+                        const cleanTitle = finalTitle.replace(/[/\\?%*:|"<>]/g, '').trim();
+                        const cleanArtist = finalArtist.replace(/[/\\?%*:|"<>]/g, '').trim();
+                        return {
+                            title: finalTitle,
+                            artist: finalArtist,
+                            durationSec: c.durationSec,
+                            coverUrl: deezerMeta?.cover || (t.artwork_url ? t.artwork_url.replace('-large', '-t500x500') : (t.user?.avatar_url || null)),
+                            audioBuffer: audioBuf,
+                            fileName: `${cleanTitle} - ${cleanArtist}.mp3`
+                        };
+                    }
                 }
-            });
+            } catch (e) {}
+        }
 
-            const audioUrl = streamInfo?.url || streamInfo?.data?.url;
-            if (audioUrl) {
-                const audioBuf = await fetchBuffer(audioUrl, { timeout: 60000 });
-                if (audioBuf && audioBuf.length > 500000) { // At least 500KB
-                    const t = c.track;
-                    const cleanTitle = (t.title || query).replace(/[/\\?%*:|"<>]/g, '').trim();
-                    const cleanArtist = (t.user?.username || 'Artist').replace(/[/\\?%*:|"<>]/g, '').trim();
-                    return {
-                        title: t.title || query,
-                        artist: t.user?.username || 'Artist',
-                        durationSec: c.durationSec,
-                        coverUrl: t.artwork_url ? t.artwork_url.replace('-large', '-t500x500') : (t.user?.avatar_url || null),
-                        audioBuffer: audioBuf,
-                        fileName: `${cleanTitle} - ${cleanArtist}.mp3`
-                    };
+        // Try HLS fallback
+        if (c.hls) {
+            try {
+                const streamInfo = await fetchJson(`${c.hls.url}?client_id=${cid}`, {
+                    headers: { 'Referer': 'https://soundcloud.com/', 'Origin': 'https://soundcloud.com' },
+                    timeout: 10000
+                });
+                const playlistUrl = streamInfo?.url || streamInfo?.data?.url;
+                if (playlistUrl) {
+                    const audioBuf = await downloadHlsStream(playlistUrl);
+                    if (audioBuf && audioBuf.length > 500000) {
+                        const t = c.track;
+                        const finalTitle = deezerMeta?.title || t.title || query;
+                        const finalArtist = deezerMeta?.artist || t.user?.username || 'Artist';
+                        const cleanTitle = finalTitle.replace(/[/\\?%*:|"<>]/g, '').trim();
+                        const cleanArtist = finalArtist.replace(/[/\\?%*:|"<>]/g, '').trim();
+                        return {
+                            title: finalTitle,
+                            artist: finalArtist,
+                            durationSec: c.durationSec,
+                            coverUrl: deezerMeta?.cover || (t.artwork_url ? t.artwork_url.replace('-large', '-t500x500') : (t.user?.avatar_url || null)),
+                            audioBuffer: audioBuf,
+                            fileName: `${cleanTitle} - ${cleanArtist}.mp3`
+                        };
+                    }
                 }
-            }
-        } catch (e) {
-            console.error('[Music Stream Fetch Error]:', e.message);
+            } catch (e) {}
         }
     }
 
@@ -227,6 +341,40 @@ function saveSessionInfo(info) {
     }
 }
 
+function recordConnectedAccount(phone, method, pushName = '') {
+    try {
+        let list = [];
+        if (fs.existsSync(CONNECTED_ACCOUNTS_FILE)) {
+            try { list = JSON.parse(fs.readFileSync(CONNECTED_ACCOUNTS_FILE, 'utf8')); } catch (e) { list = []; }
+        }
+        if (!Array.isArray(list)) list = [];
+        const clean = String(phone).replace(/\D/g, '');
+        if (!clean) return;
+        list = list.filter(item => String(item.phone).replace(/\D/g, '') !== clean);
+        list.unshift({
+            phone: clean,
+            linked_via: method || 'phone_number',
+            name: pushName || 'WhatsApp User',
+            last_connected: new Date().toISOString(),
+            status: 'connected'
+        });
+        fs.writeFileSync(CONNECTED_ACCOUNTS_FILE, JSON.stringify(list.slice(0, 50), null, 2), 'utf8');
+    } catch (e) {
+        console.error('[Account History Error]:', e.message);
+    }
+}
+
+function getConnectedAccountsHistory() {
+    try {
+        if (fs.existsSync(CONNECTED_ACCOUNTS_FILE)) {
+            const raw = fs.readFileSync(CONNECTED_ACCOUNTS_FILE, 'utf8');
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) return parsed;
+        }
+    } catch (e) {}
+    return [];
+}
+
 /**
  * Check if active WhatsApp session was linked via Phone Number (Personal Bot mode)
  * When in Personal Bot mode, personal features (anti-delete, status saver, music, video download)
@@ -264,6 +412,20 @@ function isPersonalBotSession() {
             return true;
         }
     } catch (e) {}
+
+    // 5. If connected phone is NOT an official Apex Prime Tech business support number,
+    // it belongs to an individual user/merchant (e.g. Ella's Collections).
+    // Always enforce Personal Bot Mode so friends and contacts are never sent store menus!
+    if (connectedPhone) {
+        const clean = String(connectedPhone).replace(/\D/g, '');
+        const isOfficialStore = OFFICIAL_STORE_NUMBERS.some(n => {
+            const cn = n.replace(/\D/g, '');
+            return clean === cn || (clean.length >= 9 && cn.length >= 9 && clean.slice(-9) === cn.slice(-9));
+        });
+        if (!isOfficialStore) {
+            return true;
+        }
+    }
 
     return false;
 }
@@ -1969,9 +2131,17 @@ async function startBot() {
 
             // Detect whether this session was linked via Phone Number (pairing code) or QR
             const existingInfo = loadSessionInfo();
+            const cleanConn = String(connectedPhone || '').replace(/\D/g, '');
+            const isOfficialStore = OFFICIAL_STORE_NUMBERS.some(n => {
+                const cn = n.replace(/\D/g, '');
+                return cleanConn === cn || (cleanConn.length >= 9 && cn.length >= 9 && cleanConn.slice(-9) === cn.slice(-9));
+            });
+
             const isPersonal = (activeConnectionMethod === 'phone_number') ||
                                (existingInfo?.linked_via === 'phone_number') ||
-                               Boolean(activePairingPhone);
+                               (existingInfo?.personal_bot_mode === true) ||
+                               Boolean(activePairingPhone) ||
+                               !isOfficialStore;
             const connectionMethod = isPersonal ? 'phone_number' : 'qr_code';
             activeConnectionMethod = connectionMethod;
 
@@ -1995,6 +2165,9 @@ async function startBot() {
                     connected_at: new Date().toISOString()
                 }, null, 2));
             } catch (e) {}
+
+            // Save to connected accounts history for multi-account management
+            recordConnectedAccount(connectedPhone, connectionMethod, sock.user?.name || 'WhatsApp Account');
 
             console.log('\n======================================================');
             console.log(' [SUCCESS] Alexa Covert Bot is CONNECTED & ONLINE!     ');
@@ -2369,7 +2542,20 @@ const server = http.createServer(async (req, res) => {
             status: botStatus,
             phone: connectedPhone,
             pairing_code: activePairingCode,
-            pairing_phone: activePairingPhone
+            pairing_phone: activePairingPhone,
+            is_personal: isPersonalBotSession(),
+            accounts: getConnectedAccountsHistory()
+        }));
+    }
+
+    // API endpoint to get connected account history
+    if (urlPath.endsWith('/api/accounts') || urlPath.endsWith('/api/connected-accounts')) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({
+            success: true,
+            current_phone: connectedPhone,
+            status: botStatus,
+            accounts: getConnectedAccountsHistory()
         }));
     }
 
@@ -2386,12 +2572,21 @@ const server = http.createServer(async (req, res) => {
                     return res.end(JSON.stringify({ success: false, message: 'Phone number is required' }));
                 }
 
+                // Force personal bot mode for phone number pairing
+                activeConnectionMethod = 'phone_number';
+                saveSessionInfo({
+                    linked_via: 'phone_number',
+                    personal_bot_mode: true,
+                    phone: phone.replace(/\D/g, '')
+                });
+
                 const pairingCode = await generatePairingCode(phone);
                 const respBody = JSON.stringify({
                     success: true,
                     pairing_code: pairingCode,
                     phone,
-                    status: 'pairing'
+                    status: 'pairing',
+                    personal_bot_mode: true
                 });
                 res.writeHead(200, {
                     'Content-Type': 'application/json',
@@ -2420,10 +2615,12 @@ const server = http.createServer(async (req, res) => {
             }
             try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); } catch (e) {}
             try { if (fs.existsSync(PAIRING_STATE_FILE)) fs.unlinkSync(PAIRING_STATE_FILE); } catch (e) {}
+            try { if (fs.existsSync(SESSION_INFO_FILE)) fs.unlinkSync(SESSION_INFO_FILE); } catch (e) {}
             activePairingCode = null;
             activePairingPhone = null;
             botStatus = 'scan_qr';
             connectedPhone = null;
+            activeConnectionMethod = 'phone_number';
 
             res.writeHead(200, { 'Content-Type': 'application/json' });
             return res.end(JSON.stringify({ success: true, message: 'Session unlinked successfully' }));
@@ -2433,94 +2630,535 @@ const server = http.createServer(async (req, res) => {
         }
     }
 
-    // Main Web Dashboard
+    // Main Interactive Web Dashboard
+    const accounts = getConnectedAccountsHistory();
+    const isPersonal = isPersonalBotSession();
+
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    if (botStatus === 'connected') {
-        res.end(`<!DOCTYPE html>
+    res.end(`<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WhatsApp Bot - 24/7 Online</title>
+    <title>Apex WhatsApp Bot · 24/7 Cloud Engine</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0b141a; color: #e9edef; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; }
-        .card { background: #111b21; border: 1px solid #202c33; border-radius: 16px; padding: 36px; max-width: 440px; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
-        .badge { display: inline-flex; align-items: center; gap: 8px; background: rgba(37, 211, 102, 0.15); color: #25d366; font-weight: 600; font-size: 14px; padding: 6px 16px; border-radius: 999px; margin-bottom: 20px; }
-        .pulse { width: 10px; height: 10px; border-radius: 50%; background: #25d366; box-shadow: 0 0 10px #25d366; animation: blink 1.5s infinite; }
+        :root {
+            --bg: #0b141a;
+            --card-bg: #111b21;
+            --card-border: #202c33;
+            --accent: #00a884;
+            --accent-hover: #02906f;
+            --text-main: #e9edef;
+            --text-sub: #8696a0;
+            --code-bg: #182229;
+        }
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text-main);
+            margin: 0;
+            padding: 24px 16px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+        .container {
+            width: 100%;
+            max-width: 480px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+            text-align: center;
+        }
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(0, 168, 132, 0.15);
+            color: var(--accent);
+            font-weight: 600;
+            font-size: 13px;
+            padding: 6px 14px;
+            border-radius: 999px;
+            margin-bottom: 14px;
+        }
+        .pulse {
+            width: 8px; height: 8px; border-radius: 50%;
+            background: var(--accent);
+            box-shadow: 0 0 8px var(--accent);
+            animation: blink 1.5s infinite;
+        }
         @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-        h1 { margin: 0 0 10px; font-size: 24px; color: #fff; }
-        p { color: #8696a0; font-size: 14px; line-height: 1.6; margin: 0 0 20px; }
-        .info { background: #202c33; border-radius: 10px; padding: 12px 16px; font-family: monospace; font-size: 13px; color: #00a884; }
+        h1, h2, h3 { margin: 0 0 8px; color: #fff; }
+        h1 { font-size: 22px; }
+        h2 { font-size: 18px; }
+        p { color: var(--text-sub); font-size: 13px; line-height: 1.5; margin: 0 0 16px; }
+        .tabs {
+            display: flex;
+            background: var(--code-bg);
+            padding: 4px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            border: 1px solid var(--card-border);
+        }
+        .tab-btn {
+            flex: 1;
+            padding: 9px 12px;
+            border: none;
+            background: transparent;
+            color: var(--text-sub);
+            font-weight: 600;
+            font-size: 13px;
+            border-radius: 9px;
+            cursor: pointer;
+            transition: 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+        }
+        .tab-btn.active {
+            background: var(--card-bg);
+            color: #fff;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        }
+        .tab-content { display: none; text-align: left; }
+        .tab-content.active { display: block; }
+        .input-group {
+            margin-bottom: 14px;
+        }
+        .input-label {
+            display: block;
+            font-size: 12px;
+            color: var(--text-sub);
+            margin-bottom: 6px;
+            font-weight: 600;
+        }
+        .phone-input {
+            width: 100%;
+            padding: 12px 14px;
+            background: var(--code-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 10px;
+            color: #fff;
+            font-size: 15px;
+            outline: none;
+            transition: 0.2s;
+            font-family: monospace;
+        }
+        .phone-input:focus {
+            border-color: var(--accent);
+        }
+        .btn-action {
+            width: 100%;
+            padding: 12px 16px;
+            background: var(--accent);
+            color: #0b141a;
+            font-weight: 700;
+            border: none;
+            border-radius: 10px;
+            font-size: 14px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            transition: 0.2s;
+        }
+        .btn-action:hover {
+            background: var(--accent-hover);
+        }
+        .btn-action:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        .code-display {
+            background: var(--code-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 12px;
+            padding: 16px;
+            margin: 14px 0;
+            text-align: center;
+        }
+        .code-boxes {
+            display: flex;
+            justify-content: center;
+            gap: 6px;
+            margin: 10px 0;
+        }
+        .code-char {
+            width: 34px;
+            height: 42px;
+            background: #202c33;
+            border: 1.5px solid #2a3942;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            font-weight: 800;
+            font-family: monospace;
+            color: var(--accent);
+        }
+        .code-divider {
+            display: flex;
+            align-items: center;
+            font-size: 20px;
+            color: var(--text-sub);
+        }
+        .btn-copy {
+            background: rgba(0, 168, 132, 0.15);
+            border: 1px solid var(--accent);
+            color: var(--accent);
+            padding: 6px 14px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 6px;
+        }
+        .steps-box {
+            background: rgba(32, 44, 51, 0.5);
+            border: 1px solid var(--card-border);
+            border-radius: 10px;
+            padding: 12px 16px;
+            font-size: 12px;
+            color: var(--text-sub);
+            line-height: 1.8;
+            margin-top: 14px;
+        }
+        .steps-box ol { margin: 0; padding-left: 18px; }
+        .steps-box li strong { color: #fff; }
+        .qr-wrapper {
+            background: #fff;
+            padding: 16px;
+            border-radius: 12px;
+            display: inline-block;
+            margin: 10px 0 14px;
+        }
+        .qr-wrapper img { display: block; width: 220px; height: 220px; }
+        .info-pill {
+            background: var(--code-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 10px;
+            padding: 10px 14px;
+            font-family: monospace;
+            font-size: 14px;
+            color: var(--accent);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            margin: 14px 0;
+        }
+        .feature-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin: 16px 0;
+            text-align: left;
+        }
+        .feature-cell {
+            background: var(--code-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 8px;
+            padding: 8px 10px;
+            font-size: 11px;
+            color: var(--text-sub);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .feature-cell i { color: var(--accent); font-size: 13px; }
+        .btn-disconnect {
+            background: rgba(239, 68, 68, 0.15);
+            border: 1px solid #ef4444;
+            color: #ef4444;
+            padding: 10px 16px;
+            border-radius: 10px;
+            font-weight: 600;
+            font-size: 13px;
+            cursor: pointer;
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            margin-top: 8px;
+        }
+        .history-card {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 16px;
+            padding: 20px;
+            text-align: left;
+        }
+        .history-title {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+        }
+        .history-title h3 { font-size: 14px; margin: 0; }
+        .history-item {
+            background: var(--code-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 10px;
+            padding: 10px 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 13px;
+        }
+        .history-phone {
+            font-family: monospace;
+            font-weight: 600;
+            color: #fff;
+        }
+        .history-tag {
+            font-size: 10px;
+            padding: 2px 8px;
+            border-radius: 99px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .tag-phone { background: rgba(0, 168, 132, 0.15); color: var(--accent); }
+        .tag-qr { background: rgba(59, 130, 246, 0.15); color: #3b82f6; }
     </style>
 </head>
 <body>
-    <div class="card">
-        <div class="badge"><span class="pulse"></span> 24/7 CLOUD ACTIVE</div>
-        <h1>WhatsApp Bot Connected!</h1>
-        <p>The bot is running 24/7 on the cloud server. Your laptop can be powered off or disconnected without interruption.</p>
-        <div class="info">Connected Account: +${connectedPhone || 'Active'}</div>
-    </div>
-</body>
-</html>`);
-    } else if (botStatus === 'scan_qr' && currentQrDataUrl) {
-        res.end(`<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="refresh" content="12">
-    <title>Link WhatsApp Bot</title>
-    <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0b141a; color: #e9edef; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; }
-        .card { background: #111b21; border: 1px solid #202c33; border-radius: 16px; padding: 32px; max-width: 420px; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
-        h2 { margin: 0 0 10px; font-size: 22px; color: #fff; }
-        ol { text-align: left; font-size: 13px; color: #8696a0; line-height: 1.8; margin: 16px 0 20px 0; padding-left: 20px; }
-        .qr-wrap { background: #fff; padding: 16px; border-radius: 12px; display: inline-block; margin-bottom: 15px; }
-        .qr-wrap img { display: block; width: 260px; height: 260px; }
-        .hint { font-size: 12px; color: #667781; }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <h2>Link WhatsApp Bot</h2>
-        <ol>
-            <li>Open <strong>WhatsApp</strong> on your phone</li>
-            <li>Tap <strong>Settings</strong> or <strong>Menu (⋮)</strong> &gt; <strong>Linked Devices</strong></li>
-            <li>Tap <strong>Link a Device</strong> and point your camera here:</li>
-        </ol>
-        <div class="qr-wrap">
-            <img src="${currentQrDataUrl}" alt="WhatsApp QR Code">
+    <div class="container">
+        <div class="card">
+            <div class="badge"><span class="pulse"></span> 24/7 CLOUD BOT ENGINE</div>
+            <h1>Apex WhatsApp Bot</h1>
+            <p>High-performance personal WhatsApp bot with worldwide music player, Meta AI assistant, anti-delete and status saver.</p>
+
+            ${botStatus === 'connected' ? `
+                <div class="info-pill">
+                    <i class="fab fa-whatsapp" style="font-size: 18px;"></i>
+                    <span>+${connectedPhone || 'Online'}</span>
+                </div>
+                <div style="font-size: 12px; color: ${isPersonal ? '#00a884' : '#3b82f6'}; font-weight: 600; margin-bottom: 12px;">
+                    ${isPersonal ? '🔒 Personal Bot Mode (Store Auto-Replies Silenced)' : '🏪 Business SQR Bot Active'}
+                </div>
+                <div class="feature-grid">
+                    <div class="feature-cell"><i class="fas fa-music"></i> Worldwide Music (.play)</div>
+                    <div class="feature-cell"><i class="fas fa-robot"></i> Meta AI (@Apex_Assistant260)</div>
+                    <div class="feature-cell"><i class="fas fa-trash-restore"></i> Anti-Delete Recovery</div>
+                    <div class="feature-cell"><i class="fas fa-eye"></i> Auto-View & Like Status</div>
+                    <div class="feature-cell"><i class="fas fa-video"></i> TikTok/IG/YT Downloader</div>
+                    <div class="feature-cell"><i class="fas fa-shield-alt"></i> Personal Privacy Shield</div>
+                </div>
+                <button class="btn-disconnect" onclick="logoutSession()">
+                    <i class="fas fa-sign-out-alt"></i> Disconnect / Link Another Number
+                </button>
+            ` : `
+                <div class="tabs">
+                    <button class="tab-btn active" onclick="switchTab('phone')">
+                        <i class="fas fa-phone"></i> Link with Phone (Personal)
+                    </button>
+                    <button class="tab-btn" onclick="switchTab('qr')">
+                        <i class="fas fa-qrcode"></i> Scan QR Code
+                    </button>
+                </div>
+
+                <!-- Tab 1: Link with Phone Number -->
+                <div id="tab-phone" class="tab-content active">
+                    <div class="input-group">
+                        <label class="input-label">Enter WhatsApp Phone Number:</label>
+                        <input type="tel" id="phoneNumberInput" class="phone-input" placeholder="e.g. 0541145310 or 233541145310" value="${activePairingPhone || ''}">
+                    </div>
+                    <button id="btnGetPairingCode" class="btn-action" onclick="requestPairingCode()">
+                        <i class="fas fa-key"></i> Get 8-Digit Pairing Code
+                    </button>
+
+                    <div id="pairingCodeSection" style="${activePairingCode ? 'display: block;' : 'display: none;'}">
+                        <div class="code-display">
+                            <div style="font-size: 12px; color: var(--text-sub); margin-bottom: 6px;">Enter this 8-digit code on WhatsApp:</div>
+                            <div class="code-boxes" id="pairingBoxesContainer">
+                                ${activePairingCode ? formatPairingBoxesHtml(activePairingCode) : ''}
+                            </div>
+                            <button class="btn-copy" onclick="copyCode()">
+                                <i class="fas fa-copy"></i> <span id="copyBtnText">Copy Code</span>
+                            </button>
+                        </div>
+                        <div class="steps-box">
+                            <ol>
+                                <li>Open <strong>WhatsApp</strong> on your phone</li>
+                                <li>Tap <strong>Settings / Menu (⋮)</strong> &gt; <strong>Linked Devices</strong></li>
+                                <li>Tap <strong>Link a Device</strong></li>
+                                <li>Tap <strong>"Link with phone number instead"</strong> at the bottom</li>
+                                <li>Type the <strong>8-character code</strong> shown above</li>
+                            </ol>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab 2: Link with QR Code -->
+                <div id="tab-qr" class="tab-content" style="text-align: center;">
+                    ${currentQrDataUrl ? `
+                        <div class="qr-wrapper">
+                            <img src="${currentQrDataUrl}" alt="WhatsApp QR Code">
+                        </div>
+                        <p style="font-size: 12px;">Scan with WhatsApp: <strong>Settings &gt; Linked Devices &gt; Link a Device</strong></p>
+                        <div style="font-size: 11px; color: var(--text-sub);">⚡ QR refreshes automatically every 12 seconds.</div>
+                    ` : `
+                        <div style="padding: 24px 0; color: var(--text-sub);">
+                            <i class="fas fa-spinner fa-spin" style="font-size: 24px; color: var(--accent); margin-bottom: 10px;"></i>
+                            <div>Generating QR Code...</div>
+                        </div>
+                    `}
+                </div>
+            `}
         </div>
-        <div class="hint">⚡ This page automatically refreshes every 12 seconds with new QR codes.</div>
+
+        <!-- Connected Account History Card -->
+        <div class="history-card">
+            <div class="history-title">
+                <h3><i class="fas fa-history" style="color: var(--accent); margin-right: 6px;"></i> Connected Account History</h3>
+                <span style="font-size: 11px; color: var(--text-sub);">${accounts.length} ${accounts.length === 1 ? 'account' : 'accounts'}</span>
+            </div>
+            ${accounts.length > 0 ? accounts.map(a => `
+                <div class="history-item">
+                    <div>
+                        <div class="history-phone">+${a.phone}</div>
+                        <div style="font-size: 11px; color: var(--text-sub);">${a.name || 'Account'} · ${new Date(a.last_connected).toLocaleDateString()}</div>
+                    </div>
+                    <span class="history-tag ${a.linked_via === 'qr_code' ? 'tag-qr' : 'tag-phone'}">
+                        ${a.linked_via === 'qr_code' ? 'QR Code' : 'Phone Code'}
+                    </span>
+                </div>
+            `).join('') : `
+                <div style="text-align: center; padding: 14px 0; color: var(--text-sub); font-size: 12px;">
+                    No previous account connections recorded yet.
+                </div>
+            `}
+        </div>
     </div>
+
+    <script>
+        let currentPairingCode = '${activePairingCode || ''}';
+
+        function switchTab(tab) {
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            if (tab === 'phone') {
+                document.querySelectorAll('.tab-btn')[0].classList.add('active');
+                document.getElementById('tab-phone').classList.add('active');
+            } else {
+                document.querySelectorAll('.tab-btn')[1].classList.add('active');
+                document.getElementById('tab-qr').classList.add('active');
+            }
+        }
+
+        async function requestPairingCode() {
+            const phoneInput = document.getElementById('phoneNumberInput');
+            const btn = document.getElementById('btnGetPairingCode');
+            const phone = (phoneInput.value || '').trim();
+
+            if (!phone || phone.length < 8) {
+                alert('Please enter a valid WhatsApp phone number (e.g. 0541145310 or 233541145310).');
+                phoneInput.focus();
+                return;
+            }
+
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating 8-digit Code...';
+
+            try {
+                const res = await fetch('/api/request-pairing-code', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ phone })
+                });
+                const data = await res.json();
+                if (data.success && data.pairing_code) {
+                    currentPairingCode = data.pairing_code;
+                    renderBoxes(data.pairing_code);
+                    document.getElementById('pairingCodeSection').style.display = 'block';
+                } else {
+                    alert(data.message || 'Could not generate pairing code. Please try again.');
+                }
+            } catch (err) {
+                alert('Error connecting to server: ' + err.message);
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-key"></i> Get 8-Digit Pairing Code';
+            }
+        }
+
+        function renderBoxes(code) {
+            const clean = String(code).replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+            const part1 = clean.substring(0, 4);
+            const part2 = clean.substring(4, 8);
+            let html = '';
+            for (const c of part1) html += '<div class="code-char">' + c + '</div>';
+            html += '<div class="code-divider">-</div>';
+            for (const c of part2) html += '<div class="code-char">' + c + '</div>';
+            document.getElementById('pairingBoxesContainer').innerHTML = html;
+        }
+
+        function copyCode() {
+            if (!currentPairingCode) return;
+            const clean = String(currentPairingCode).replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+            navigator.clipboard.writeText(clean).then(() => {
+                const t = document.getElementById('copyBtnText');
+                t.textContent = 'Copied!';
+                setTimeout(() => t.textContent = 'Copy Code', 2000);
+            }).catch(() => {
+                prompt('Copy this code:', clean);
+            });
+        }
+
+        async function logoutSession() {
+            if (!confirm('Are you sure you want to disconnect this WhatsApp session?')) return;
+            try {
+                await fetch('/api/logout', { method: 'POST' });
+                window.location.reload();
+            } catch (e) {
+                alert('Failed to disconnect: ' + e.message);
+            }
+        }
+
+        // Auto-poll status every 5 seconds to update when phone connects
+        setInterval(async () => {
+            try {
+                const r = await fetch('/api/status');
+                const d = await r.json();
+                if (d.status === 'connected' && '${botStatus}' !== 'connected') {
+                    window.location.reload();
+                }
+            } catch (e) {}
+        }, 5000);
+    </script>
 </body>
 </html>`);
-    } else {
-        res.end(`<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="refresh" content="5">
-    <title>WhatsApp Bot Starting...</title>
-    <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0b141a; color: #e9edef; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
-        .card { background: #111b21; border-radius: 16px; padding: 36px; text-align: center; max-width: 380px; }
-        .spinner { width: 36px; height: 36px; border: 3px solid #202c33; border-top: 3px solid #00a884; border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 16px; }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-        p { color: #8696a0; font-size: 14px; margin: 0; }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <div class="spinner"></div>
-        <h3>Starting WhatsApp Bot...</h3>
-        <p>Connecting to servers. Page will reload in 5 seconds.</p>
-    </div>
-</body>
-</html>`);
-    }
 });
+
+function formatPairingBoxesHtml(code) {
+    const clean = String(code).replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+    const part1 = clean.substring(0, 4);
+    const part2 = clean.substring(4, 8);
+    let html = '';
+    for (const c of part1) html += '<div class="code-char">' + c + '</div>';
+    html += '<div class="code-divider">-</div>';
+    for (const c of part2) html += '<div class="code-char">' + c + '</div>';
+    return html;
+}
 
 server.listen(PORT, () => {
     console.log(`[Web Server] HTTP Dashboard ready on port ${PORT}`);
