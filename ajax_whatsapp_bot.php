@@ -422,18 +422,24 @@ if ($action === 'update_settings') {
         $stmt->execute([$autoview, $autolike, $antidelete, $savedviews, $autoreply, $downloader, $music, $userId]);
     }
 
-    // Sync to bot_commands.json userbot_settings
-    $cfgFile = __DIR__ . '/bot_commands.json';
-    if (file_exists($cfgFile)) {
-        $cfg = json_decode(@file_get_contents($cfgFile), true) ?: [];
-        $cfg['userbot_settings'] = $cfg['userbot_settings'] ?? [];
-        $cfg['userbot_settings']['autoview'] = (bool)$autoview;
-        $cfg['userbot_settings']['autolike'] = (bool)$autolike;
-        $cfg['userbot_settings']['savedviews'] = (bool)$savedviews;
-        $cfg['userbot_settings']['recoverydeleted'] = (bool)$antidelete;
-        $cfg['userbot_settings']['autoreply'] = (bool)$autoreply;
-        $cfg['userbot_settings']['personal_mode_only'] = ($autoreply === 0);
-        @file_put_contents($cfgFile, json_encode($cfg, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+    // Sync to bot_commands.json and whatsapp_qr_bot/commands.json userbot_settings
+    $syncFiles = [
+        __DIR__ . '/bot_commands.json',
+        $botDir . '/commands.json',
+        $botDir . '/bot_commands.json'
+    ];
+    foreach ($syncFiles as $cfgFile) {
+        if (file_exists($cfgFile)) {
+            $cfg = json_decode(@file_get_contents($cfgFile), true) ?: [];
+            $cfg['userbot_settings'] = $cfg['userbot_settings'] ?? [];
+            $cfg['userbot_settings']['autoview'] = (bool)$autoview;
+            $cfg['userbot_settings']['autolike'] = (bool)$autolike;
+            $cfg['userbot_settings']['savedviews'] = (bool)$savedviews;
+            $cfg['userbot_settings']['recoverydeleted'] = (bool)$antidelete;
+            $cfg['userbot_settings']['autoreply'] = (bool)$autoreply;
+            $cfg['userbot_settings']['personal_mode_only'] = ($autoreply === 0);
+            @file_put_contents($cfgFile, json_encode($cfg, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+        }
     }
 
     // Sync to session_info.json

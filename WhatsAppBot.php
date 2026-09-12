@@ -264,6 +264,12 @@ class WhatsAppBot {
         // 1. Save to JSON file
         $jsonOk = @file_put_contents(self::CONFIG_FILE, json_encode($merged, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) !== false;
 
+        // Also sync to whatsapp_qr_bot/commands.json
+        $qrBotCfg = __DIR__ . '/../whatsapp_qr_bot/commands.json';
+        if (file_exists($qrBotCfg)) {
+            @file_put_contents($qrBotCfg, json_encode($merged, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+        }
+
         // 2. Sync to DB if PDO available
         if ($pdo && isset($data['commands']) && is_array($data['commands'])) {
             try {
