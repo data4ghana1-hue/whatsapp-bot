@@ -2027,6 +2027,14 @@ async function startBot() {
 // Built-in Web Server for cPanel / Cloud Hosting & Web QR Scanner / Alexa Covert Pairing
 const PORT = process.env.PORT || 3000;
 const server = http.createServer(async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') {
+        res.writeHead(204);
+        return res.end();
+    }
+
     const urlPath = (req.url || '').split('?')[0].replace(/\/+$/, '');
 
     // API endpoint for health check or status
@@ -2041,7 +2049,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     // POST /api/request-pairing-code (Alexa Covert Pairing Endpoint)
-    if (urlPath.endsWith('/api/request-pairing-code') && req.method === 'POST') {
+    if ((urlPath.endsWith('/api/request-pairing-code') || urlPath.endsWith('/request-pairing-code')) && req.method === 'POST') {
         let body = '';
         req.on('data', chunk => body += chunk);
         req.on('end', async () => {
