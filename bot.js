@@ -903,7 +903,7 @@ async function handleCustomerInteractiveSession(phone, text, name) {
             customerSessions.delete(phone);
             const cleanRef = raw.replace(/[^a-zA-Z0-9_\-]/g, '');
             if (cleanRef.length < 4) {
-                return `*Invalid Reference Number*\n\nPlease enter a valid Paystack Reference or MoMo Transaction ID (e.g. \`T1234567890\`, \`APX-1725894123\`, or \`24892019482\`).\n\n(Reply *menu* to return to the main menu)`;
+                return `*Invalid Reference Number*\n\nPlease enter a valid Paystack Reference or MoMo Transaction ID (e.g. \`TOPUP-23455\` or \`24892019482\`).\n\n(Reply *menu* to return to the main menu)`;
             }
 
             // 1. Try website API
@@ -933,6 +933,42 @@ async function handleCustomerInteractiveSession(phone, text, name) {
                     resolve(`*Verification Complete*\nTransaction was submitted for verification. Reply *balance* to check your updated wallet balance.`);
                 });
             });
+        }
+
+        // Step 6: Customer Support Report Session
+        if (session.step === 'report_awaiting_details') {
+            customerSessions.delete(phone);
+            if (['cancel', 'exit', 'stop', 'quit', 'abort', '0'].includes(lower)) {
+                return `*Support request cancelled.*\n\nType *menu* to return to the main menu.`;
+            }
+
+            const ticketCode = 'TICK-' + Math.floor(100000 + Math.random() * 900000);
+            const orderIdMatch = raw.match(/#?(\d{4,8})/);
+            const orderId = orderIdMatch ? parseInt(orderIdMatch[1]) : null;
+
+            const botReply = `*Support Ticket Created*\n`
+                + `━━━━━━━━━━━━━━━━━━━━━\n`
+                + `• Ticket ID: *${ticketCode}*\n`
+                + `• Status: *Under Investigation*\n`
+                + `• Priority: *High*\n`
+                + `━━━━━━━━━━━━━━━━━━━━━\n`
+                + `Thank you for reporting, *${name || 'Customer'}*. Our customer support manager has been alerted and will review your issue immediately.\n\n`
+                + `Direct Support Line: *0553381853*\n`
+                + `Direct WhatsApp: https://wa.me/233553381853\n`
+                + `Average response time: *Under 10 minutes*`;
+
+            await callWebsiteApi({
+                op: 'log_ticket',
+                ticket_code: ticketCode,
+                phone: phone,
+                name: name || 'Customer',
+                message: raw,
+                issue_type: session.data?.issue_type || 'customer_inquiry',
+                order_id: orderId,
+                bot_reply: botReply
+            });
+
+            return botReply;
         }
 
         // ── WAEC RESULT CHECKER INTERACTIVE STEPS ──
@@ -1085,8 +1121,8 @@ async function handleCustomerInteractiveSession(phone, text, name) {
         }
     }
 
-    // Direct 1-line verify command (e.g. "verify APX-1725894123" or "verify 24892019482")
-    if (lower.startsWith('verify ') || lower.startsWith('verify:')) {
+    // Direct 1-line verify command (e.g. "verify TOPUP-23455", "TOPUP-23455", or "verify 24892019482")
+    if (lower.startsWith('verify ') || lower.startsWith('verify:') || /^topup[\s\-_]*\d+$/i.test(raw.trim())) {
         const cleanRef = raw.replace(/^verify[:\s]+/i, '').trim().replace(/[^a-zA-Z0-9_\-]/g, '');
         if (cleanRef.length >= 4) {
             customerSessions.delete(phone);
@@ -1109,12 +1145,49 @@ async function handleCustomerInteractiveSession(phone, text, name) {
     // 4. Trigger "4" / "verify payment"
     if (lower === '4' || lower === '4.' || ['verify payment', 'verify', 'payment', 'paid', 'check payment'].includes(lower)) {
         customerSessions.set(phone, { step: 'verify_payment_ref', data: {}, timestamp: now });
-        return `*Payment Verification — Apex Prime Tech*\n━━━━━━━━━━━━━━━━━━━━━\nTo verify your payment and update your wallet or order:\n\nPlease reply with your *Paystack Reference* or *MoMo Transaction ID*:\n• Example Paystack: \`T1234567890\` or \`APX-1725894123\`\n• Example MoMo ID: \`24892019482\`\n\n_(Reply *cancel* anytime to abort)_`;
+        return `*Payment Verification — Apex Prime Tech*\n━━━━━━━━━━━━━━━━━━━━━\nTo verify your payment and update your wallet or order:\n\nPlease reply with your *Paystack Reference* or *MoMo Transaction ID*:\n• Example Paystack: \`TOPUP-23455\`\n• Example MoMo ID: \`24892019482\`\n\n_(Reply *cancel* anytime to abort)_`;
     }
 
-    // 5. Trigger "5" / "talk to an agent" / "agent" / "support"
-    if (lower === '5' || lower === '5.' || ['talk to an agent', 'talk to agent', 'agent', 'support', 'human'].includes(lower)) {
-        return `*Talk to an Agent — Apex Prime Tech*\n━━━━━━━━━━━━━━━━━━━━━\nOur customer support team is here to assist you 24/7!\n\nPhone / WhatsApp: *0553381853*\nDirect WhatsApp: https://wa.me/233553381853\nWebsite: https://apexprime.club\n\nPlease send your message or question right here, and an agent will attend to you shortly!`;
+    // Direct 1-line report e.g. "report my order 12345 delayed" or "issue with payment"
+    if (/^(?:report|complaint|issue)[:\s]+(.+)$/i.test(raw)) {
+        const match = raw.match(/^(?:report|complaint|issue)[:\s]+(.+)$/i);
+        const reportMsg = match ? match[1].trim() : '';
+        if (reportMsg.length >= 3) {
+            customerSessions.delete(phone);
+            const ticketCode = 'TICK-' + Math.floor(100000 + Math.random() * 900000);
+            const orderIdMatch = reportMsg.match(/#?(\d{4,8})/);
+            const orderId = orderIdMatch ? parseInt(orderIdMatch[1]) : null;
+
+            const botReply = `*Support Ticket Created*\n`
+                + `━━━━━━━━━━━━━━━━━━━━━\n`
+                + `• Ticket ID: *${ticketCode}*\n`
+                + `• Status: *Under Investigation*\n`
+                + `• Priority: *High*\n`
+                + `━━━━━━━━━━━━━━━━━━━━━\n`
+                + `Thank you for reporting, *${name || 'Customer'}*. Our customer support manager has been alerted and will review your issue immediately.\n\n`
+                + `Direct Support Line: *0553381853*\n`
+                + `Direct WhatsApp: https://wa.me/233553381853\n`
+                + `Average response time: *Under 10 minutes*`;
+
+            await callWebsiteApi({
+                op: 'log_ticket',
+                ticket_code: ticketCode,
+                phone: phone,
+                name: name || 'Customer',
+                message: reportMsg,
+                issue_type: 'direct_report',
+                order_id: orderId,
+                bot_reply: botReply
+            });
+
+            return botReply;
+        }
+    }
+
+    // 5. Trigger "5" / "talk to an agent" / "agent" / "support" / "report" / "complaint"
+    if (lower === '5' || lower === '5.' || ['talk to an agent', 'talk to agent', 'agent', 'support', 'human', 'report', 'complaint', 'issue', 'problem', 'help desk'].includes(lower)) {
+        customerSessions.set(phone, { step: 'report_awaiting_details', data: { issue_type: 'customer_inquiry' }, timestamp: now });
+        return `*Apex Prime Tech — Customer Support Desk*\n━━━━━━━━━━━━━━━━━━━━━\nHello *${name || 'Customer'}*, our support agents are ready to assist you!\n\nPlease describe your request, question, or issue in detail below:\n_(If you have an Order ID or Transaction Reference, please include it)_\n\n_(Reply *cancel* anytime to abort)_`;
     }
 
     // 6. Trigger "6" / "other services" (Academic Writing, Website Design, Apple Plans, Merchant Onboarding)
@@ -2530,6 +2603,22 @@ async function startBot() {
 
             // 12. Process via full PHP WhatsAppBot engine (AI, Sessions, WAEC Check, SQL DB Verify)
             try { await sock.sendPresenceUpdate('composing', from); } catch (e) {}
+
+            // Auto-React: Check if incoming message is a report/complaint or active report session
+            const trimmedMsgText = text.trim();
+            const activeCustomerSession = customerSessions.get(senderPhone);
+            const isReportIncoming = /^(?:5|5\.|\.report|report|complaint|issue|problem)\b/i.test(trimmedMsgText) ||
+                (activeCustomerSession && activeCustomerSession.step === 'report_awaiting_details');
+
+            if (isReportIncoming) {
+                try {
+                    await sock.sendMessage(from, { react: { text: '📝', key: msg.key } });
+                    console.log(`[Auto-React] Reacted 📝 to report message from ${senderPhone}`);
+                } catch (reactErr) {
+                    console.error('[Auto-React Error]:', reactErr.message);
+                }
+            }
+
             const bridgeRes = await processMessageViaBridge(senderPhone, text, pushName);
             let reply = bridgeRes ? (typeof bridgeRes === 'string' ? bridgeRes : bridgeRes.reply) : null;
 
@@ -2538,11 +2627,40 @@ async function startBot() {
                 reply = findMatchingResponse(text, pushName, senderPhone);
             }
 
+            // If bridge or session returned a support ticket or report desk response, ensure reaction is sent
+            const isReportReply = reply && (
+                reply.includes('Support Ticket Created') || 
+                reply.includes('Customer Support Desk') ||
+                bridgeRes?.matched === 'REPORT_SESSION' || 
+                bridgeRes?.matched === 'REPORT_ISSUE'
+            );
+
+            if (isReportReply && !isReportIncoming) {
+                try {
+                    await sock.sendMessage(from, { react: { text: '📝', key: msg.key } });
+                    console.log(`[Auto-React] Reacted 📝 to report response for ${senderPhone}`);
+                } catch (reactErr) {
+                    console.error('[Auto-React Error]:', reactErr.message);
+                }
+            }
+
             if (reply) {
                 try {
                     await sock.sendMessage(from, { text: reply }, { quoted: msg });
                     try { await sock.sendPresenceUpdate('paused', from); } catch (e) {}
                     console.log(`[Reply Sent] -> To: ${senderPhone}`);
+
+                    // Forward newly created support tickets to admin/owner WhatsApp
+                    if (reply.includes('Support Ticket Created')) {
+                        try {
+                            const adminJid = '233553381853@s.whatsapp.net';
+                            const alertMsg = `*New Customer Report / Support Ticket*\n━━━━━━━━━━━━━━━━━━━━━\n👤 *Customer:* ${pushName} (\`${senderPhone}\`)\n💬 *Message:* ${trimmedMsgText}\n\n${reply}`;
+                            await sock.sendMessage(adminJid, { text: alertMsg });
+                            console.log(`[Support Alert] Forwarded ticket to ${adminJid}`);
+                        } catch (alertErr) {
+                            console.error('[Support Alert Error]:', alertErr.message);
+                        }
+                    }
 
                     // 10. If an official WAEC Result Slip PDF document was generated, send it directly!
                     if (bridgeRes && bridgeRes.pdf_file && fs.existsSync(bridgeRes.pdf_file)) {

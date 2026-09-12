@@ -454,6 +454,30 @@ if ($action === 'bot_query' || $action === 'bot_lookup_user') {
         $res = WhatsAppBot::purchaseResultCheckerCard($userId, $category, $cost, $phoneNum, 'Customer', $pdo);
         jsonResponse(true, 'Checker purchased', ['data' => $res]);
     }
+
+    // 7. LOG CUSTOMER SUPPORT TICKET / REPORT
+    if ($op === 'log_ticket') {
+        $ticketCode  = trim($requestData['ticket_code'] ?? $_POST['ticket_code'] ?? ('TICK-' . mt_rand(100000, 999999)));
+        $senderPhone = trim($requestData['phone'] ?? $_POST['phone'] ?? '');
+        $senderName  = trim($requestData['name'] ?? $_POST['name'] ?? 'Customer');
+        $message     = trim($requestData['message'] ?? $_POST['message'] ?? '');
+        $issueType   = trim($requestData['issue_type'] ?? $_POST['issue_type'] ?? 'general');
+        $orderId     = !empty($requestData['order_id']) ? (int)$requestData['order_id'] : null;
+        $botReply    = trim($requestData['bot_reply'] ?? $_POST['bot_reply'] ?? '');
+
+        require_once __DIR__ . '/classes/WhatsAppBot.php';
+        if ($pdo) {
+            try {
+                WhatsAppBot::ensureTicketsTable($pdo);
+                $stmt = $pdo->prepare("
+                    INSERT INTO whatsapp_support_tickets (ticket_code, sender_phone, sender_name, order_id, issue_type, message, bot_reply, status, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 'open', NOW())
+                ");
+                $stmt->execute([$ticketCode, $senderPhone, $senderName, $orderId, $issueType, $message, $botReply]);
+            } catch (Throwable $e) {}
+        }
+        jsonResponse(true, 'Ticket logged successfully', ['ticket_code' => $ticketCode]);
+    }
 }
 
 $suppliedApiKey = trim($requestData['api_key'] ?? $_POST['api_key'] ?? $_GET['api_key'] ?? '');

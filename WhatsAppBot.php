@@ -2879,7 +2879,7 @@ class WhatsAppBot {
             if ($session['step'] === 'verify_payment_ref') {
                 $cleanRef = preg_replace('/[^a-zA-Z0-9_\-]/', '', $cleanText);
                 if (strlen($cleanRef) < 4) {
-                    return "*Invalid Reference Number*\n\nPlease enter a valid Paystack Reference or MoMo Transaction ID (e.g. `T1234567890`, `APX-1725894123`, or `24892019482`):\n\n_(Reply *cancel* to abort)_";
+                    return "*Invalid Reference Number*\n\nPlease enter a valid Paystack Reference or MoMo Transaction ID (e.g. `TOPUP-23455` or `24892019482`):\n\n_(Reply *cancel* to abort)_";
                 }
 
                 self::clearUserSession($phone, $pdo);
@@ -2887,8 +2887,8 @@ class WhatsAppBot {
             }
         }
 
-        // Direct 1-line check e.g. "verify TOP-UP1222", "verify APX-1725894123", or "verify <ref> <agent_code>"
-        if (preg_match('/^verify\s+([a-zA-Z0-9_\-]{4,60})(?:\s+(?:APEX[\s\-_]*)?(\d+))?/i', $cleanText, $directMatch)) {
+        // Direct 1-line check e.g. "verify TOPUP-23455", "TOPUP-23455", or "verify <ref> <agent_code>"
+        if (preg_match('/^(?:verify\s+)?(topup[\s\-_]*\d+|[a-zA-Z0-9_\-]{4,60})(?:\s+(?:APEX[\s\-_]*)?(\d+))?/i', $cleanText, $directMatch) && (strpos($lower, 'verify') === 0 || preg_match('/^topup[\s\-_]*\d+$/i', $cleanText))) {
             $ref = $directMatch[1];
             $agentId = !empty($directMatch[2]) ? (int)$directMatch[2] : 0;
             return self::executePaymentVerification($ref, $agentId, $agentId > 0 ? "APEX-{$agentId}" : '', $phone, $profileName, $pdo);
@@ -2933,7 +2933,7 @@ class WhatsAppBot {
              . "━━━━━━━━━━━━━━━━━━━━━\n"
              . "To verify your payment and update your wallet or order:\n\n"
              . "Please reply with your *Paystack Reference* or *MoMo Transaction ID*:\n"
-             . "• Example Paystack: `T1234567890` or `APX-1725894123`\n"
+             . "• Example Paystack: `TOPUP-23455`\n"
              . "• Example MoMo ID: `24892019482`\n\n"
              . "_(Reply *cancel* anytime to abort)_";
     }
@@ -3332,25 +3332,61 @@ class WhatsAppBot {
             $botReply = "*Support Ticket Created*\n"
                       . "━━━━━━━━━━━━━━━━━━━━━\n"
                       . "• Ticket ID: *{$ticketCode}*\n"
-                      . "• Status: *Under Investigation* ⏳\n"
+                      . "• Status: *Under Investigation*\n"
                       . "• Priority: *High*\n"
                       . "━━━━━━━━━━━━━━━━━━━━━\n"
                       . "Thank you for reporting, *{$profileName}*. Our customer support manager has been alerted and will review your issue immediately.\n\n"
                       . "Direct Support Line: *0553381853*\n"
+                      . "Direct WhatsApp: https://wa.me/233553381853\n"
                       . "Average response time: *Under 10 minutes*";
 
             if ($pdo) {
                 try {
                     self::ensureTicketsTable($pdo);
                     $stmt = $pdo->prepare("
-                        INSERT INTO whatsapp_support_tickets (ticket_code, sender_phone, sender_name, order_id, issue_type, message, bot_reply)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        INSERT INTO whatsapp_support_tickets (ticket_code, sender_phone, sender_name, order_id, issue_type, message, bot_reply, status, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, 'open', NOW())
                     ");
                     $stmt->execute([$ticketCode, $phone, $profileName, $orderId, $issueType, $cleanText, $botReply]);
                 } catch (Throwable $e) {}
             }
 
             return $botReply;
+        }
+
+        // Direct 1-line report e.g. "report my order 12345 delayed" or "issue with payment"
+        if (preg_match('/^(?:report|complaint|issue)[:\s]+(.+)$/i', $cleanText, $mReport)) {
+            $reportMsg = trim($mReport[1]);
+            if (strlen($reportMsg) >= 4) {
+                self::clearUserSession($phone, $pdo);
+                $ticketCode = 'TICK-' . mt_rand(100000, 999999);
+                $orderId = null;
+                if (preg_match('/#?(\d{4,8})/', $reportMsg, $mOid)) {
+                    $orderId = (int)$mOid[1];
+                }
+                $botReply = "*Support Ticket Created*\n"
+                          . "━━━━━━━━━━━━━━━━━━━━━\n"
+                          . "• Ticket ID: *{$ticketCode}*\n"
+                          . "• Status: *Under Investigation*\n"
+                          . "• Priority: *High*\n"
+                          . "━━━━━━━━━━━━━━━━━━━━━\n"
+                          . "Thank you for reporting, *{$profileName}*. Our customer support manager has been alerted and will review your issue immediately.\n\n"
+                          . "Direct Support Line: *0553381853*\n"
+                          . "Direct WhatsApp: https://wa.me/233553381853\n"
+                          . "Average response time: *Under 10 minutes*";
+
+                if ($pdo) {
+                    try {
+                        self::ensureTicketsTable($pdo);
+                        $stmt = $pdo->prepare("
+                            INSERT INTO whatsapp_support_tickets (ticket_code, sender_phone, sender_name, order_id, issue_type, message, bot_reply, status, created_at)
+                            VALUES (?, ?, ?, ?, 'direct_report', ?, ?, 'open', NOW())
+                        ");
+                        $stmt->execute([$ticketCode, $phone, $profileName, $orderId, $reportMsg, $botReply]);
+                    } catch (Throwable $e) {}
+                }
+                return $botReply;
+            }
         }
 
         // Direct triggers: 5, talk to an agent, support, agent, complaint, report

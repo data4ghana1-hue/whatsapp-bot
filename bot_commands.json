@@ -56,13 +56,13 @@
             "command_trigger": "4,4.,verify payment,verify,payment,check payment,paid,paystack",
             "match_type": "contains",
             "action_type": "verify_payment",
-            "response_text": "*Payment Verification — Apex Prime Tech*\n━━━━━━━━━━━━━━━━━━━━━\nTo verify your payment and update your wallet or order:\n\nPlease reply with your *Paystack Reference* or *MoMo Transaction ID*:\n• Example Paystack: `T1234567890` or `APX-1725894123`\n• Example MoMo ID: `24892019482`\n\n_(Reply *cancel* anytime to abort)_",
+            "response_text": "*Payment Verification — Apex Prime Tech*\n━━━━━━━━━━━━━━━━━━━━━\nTo verify your payment and update your wallet or order:\n\nPlease reply with your *Paystack Reference* or *MoMo Transaction ID*:\n• Example Paystack: `TOPUP-23455`\n• Example MoMo ID: `24892019482`\n\n_(Reply *cancel* anytime to abort)_",
             "description": "4. Verify Payment",
             "is_active": true
         },
         {
             "id": 6,
-            "command_trigger": "5,5.,talk to an agent,talk to agent,agent,support,help,contact,human",
+            "command_trigger": "5,5.,talk to an agent,talk to agent,agent,support,help,contact,human,report,complaint,issue,problem",
             "match_type": "contains",
             "action_type": "support_agent",
             "response_text": "*Talk to an Agent — Apex Prime Tech*\n━━━━━━━━━━━━━━━━━━━━━\nOur customer support team is here to assist you!\n\nWhatsApp \/ Phone: *0553381853*\nWebsite: https:\/\/apexprime.club\nSupport Hours: 24\/7 Priority Support\n\nPlease type your message or issue below, and an agent will assist you shortly.",
