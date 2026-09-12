@@ -1148,46 +1148,62 @@ async function handleCustomerInteractiveSession(phone, text, name) {
         return `*Payment Verification — Apex Prime Tech*\n━━━━━━━━━━━━━━━━━━━━━\nTo verify your payment and update your wallet or order:\n\nPlease reply with your *Paystack Reference* or *MoMo Transaction ID*:\n• Example Paystack: \`TOPUP-23455\`\n• Example MoMo ID: \`24892019482\`\n\n_(Reply *cancel* anytime to abort)_`;
     }
 
-    // Direct 1-line report e.g. "report my order 12345 delayed" or "issue with payment"
-    if (/^(?:report|complaint|issue)[:\s]+(.+)$/i.test(raw)) {
-        const match = raw.match(/^(?:report|complaint|issue)[:\s]+(.+)$/i);
-        const reportMsg = match ? match[1].trim() : '';
-        if (reportMsg.length >= 3) {
-            customerSessions.delete(phone);
-            const ticketCode = 'TICK-' + Math.floor(100000 + Math.random() * 900000);
-            const orderIdMatch = reportMsg.match(/#?(\d{4,8})/);
-            const orderId = orderIdMatch ? parseInt(orderIdMatch[1]) : null;
+    // Robust check: does this message report an issue / complaint / delivery problem?
+    const isReportMsg = /(?:\b(?:report|complaint|complain|issue|problem|ticket)\b|\b(?:hasn'?t|haven'?t|didn'?t|not|never)\s+(?:received?|arrived?|delivered?|got)\b|\b(?:yet\s+to\s+receive|delayed|pending\s+too\s+long|failed\s+delivery)\b|\b(?:help\s+me\s+resolve|resolve\s+this)\b|(?:order\s*id\s*[:#]|order\s*#\s*\d+))/i.test(raw);
 
-            const botReply = `*Support Ticket Created*\n`
-                + `━━━━━━━━━━━━━━━━━━━━━\n`
-                + `• Ticket ID: *${ticketCode}*\n`
-                + `• Status: *Under Investigation*\n`
-                + `• Priority: *High*\n`
-                + `━━━━━━━━━━━━━━━━━━━━━\n`
-                + `Thank you for reporting, *${name || 'Customer'}*. Our customer support manager has been alerted and will review your issue immediately.\n\n`
-                + `Direct Support Line: *0553381853*\n`
-                + `Direct WhatsApp: https://wa.me/233553381853\n`
-                + `Average response time: *Under 10 minutes*`;
+    // Short inquiry triggers: "5", "report", "support", "agent"
+    const isShortReportTrigger = lower === '5' || lower === '5.' || ['talk to an agent', 'talk to agent', 'agent', 'support', 'human', 'report', 'complaint', 'issue', 'problem', 'help desk', 'help'].includes(lower);
 
-            await callWebsiteApi({
-                op: 'log_ticket',
-                ticket_code: ticketCode,
-                phone: phone,
-                name: name || 'Customer',
-                message: reportMsg,
-                issue_type: 'direct_report',
-                order_id: orderId,
-                bot_reply: botReply
-            });
-
-            return botReply;
-        }
-    }
-
-    // 5. Trigger "5" / "talk to an agent" / "agent" / "support" / "report" / "complaint"
-    if (lower === '5' || lower === '5.' || ['talk to an agent', 'talk to agent', 'agent', 'support', 'human', 'report', 'complaint', 'issue', 'problem', 'help desk'].includes(lower)) {
+    if (isShortReportTrigger) {
         customerSessions.set(phone, { step: 'report_awaiting_details', data: { issue_type: 'customer_inquiry' }, timestamp: now });
         return `*Apex Prime Tech — Customer Support Desk*\n━━━━━━━━━━━━━━━━━━━━━\nHello *${name || 'Customer'}*, our support agents are ready to assist you!\n\nPlease describe your request, question, or issue in detail below:\n_(If you have an Order ID or Transaction Reference, please include it)_\n\n_(Reply *cancel* anytime to abort)_`;
+    }
+
+    if (isReportMsg && raw.length >= 8) {
+        customerSessions.delete(phone);
+        const ticketCode = 'TICK-' + Math.floor(100000 + Math.random() * 900000);
+        let orderId = null;
+        let orderDisplay = null;
+        let recipientPhone = null;
+
+        const oidMatch = raw.match(/(?:order\s*(?:id|#|no|ref)?\s*[:#\-\s]*)([A-Za-z0-9_\-]+)/i);
+        if (oidMatch) {
+            orderDisplay = oidMatch[1].trim();
+            const numMatch = orderDisplay.match(/\d+/);
+            if (numMatch) orderId = parseInt(numMatch[0]);
+        }
+
+        const phoneMatch = raw.match(/(?:to\s*|phone\s*[:#\-\s]*|recipient\s*[:#\-\s]*)(0\d{9}|233\d{9})/i) ||
+                           raw.match(/\b(0[235]\d{8})\b/);
+        if (phoneMatch) {
+            recipientPhone = phoneMatch[1].trim();
+        }
+
+        const botReply = `*Support Ticket Created*\n`
+            + `━━━━━━━━━━━━━━━━━━━━━\n`
+            + `• Ticket ID: *${ticketCode}*\n`
+            + (orderDisplay ? `• Order ID: *${orderDisplay}*\n` : '')
+            + (recipientPhone ? `• Recipient: \`${recipientPhone}\`\n` : '')
+            + `• Status: *Under Investigation*\n`
+            + `• Priority: *High*\n`
+            + `━━━━━━━━━━━━━━━━━━━━━\n`
+            + `Thank you for reporting, *${name || 'Customer'}*. Our customer support manager has been alerted and will review your issue immediately.\n\n`
+            + `Direct Support Line: *0553381853*\n`
+            + `Direct WhatsApp: https://wa.me/233553381853\n`
+            + `Average response time: *Under 10 minutes*`;
+
+        await callWebsiteApi({
+            op: 'log_ticket',
+            ticket_code: ticketCode,
+            phone: phone,
+            name: name || 'Customer',
+            message: raw,
+            issue_type: 'order_issue',
+            order_id: orderId,
+            bot_reply: botReply
+        });
+
+        return botReply;
     }
 
     // 6. Trigger "6" / "other services" (Academic Writing, Website Design, Apple Plans, Merchant Onboarding)
@@ -2607,7 +2623,9 @@ async function startBot() {
             // Auto-React: Check if incoming message is a report/complaint or active report session
             const trimmedMsgText = text.trim();
             const activeCustomerSession = customerSessions.get(senderPhone);
-            const isReportIncoming = /^(?:5|5\.|\.report|report|complaint|issue|problem)\b/i.test(trimmedMsgText) ||
+            const isReportPattern = /(?:\b(?:report|complaint|complain|issue|problem|ticket)\b|\b(?:hasn'?t|haven'?t|didn'?t|not|never)\s+(?:received?|arrived?|delivered?|got)\b|\b(?:yet\s+to\s+receive|delayed|pending\s+too\s+long|failed\s+delivery)\b|\b(?:help\s+me\s+resolve|resolve\s+this)\b|(?:order\s*id\s*[:#]|order\s*#\s*\d+))/i;
+            const isReportIncoming = isReportPattern.test(trimmedMsgText) ||
+                /^(?:5|5\.|\.report|report|complaint|issue|problem|help)\b/i.test(trimmedMsgText) ||
                 (activeCustomerSession && activeCustomerSession.step === 'report_awaiting_details');
 
             if (isReportIncoming) {
@@ -2628,12 +2646,12 @@ async function startBot() {
             }
 
             // If bridge or session returned a support ticket or report desk response, ensure reaction is sent
-            const isReportReply = reply && (
+            const isReportReply = Boolean(bridgeRes?.is_report) || (reply && (
                 reply.includes('Support Ticket Created') || 
                 reply.includes('Customer Support Desk') ||
                 bridgeRes?.matched === 'REPORT_SESSION' || 
                 bridgeRes?.matched === 'REPORT_ISSUE'
-            );
+            ));
 
             if (isReportReply && !isReportIncoming) {
                 try {
