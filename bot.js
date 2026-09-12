@@ -45,6 +45,109 @@ const https = require('https');
 const querystring = require('querystring');
 const { execFile } = require('child_process');
 
+let playDl = null;
+try {
+    playDl = require('play-dl');
+} catch (e) {}
+
+let cachedScClientId = null;
+let lastScCidFetch = 0;
+
+async function getSoundCloudClientId() {
+    if (cachedScClientId && (Date.now() - lastScCidFetch < 6 * 3600 * 1000)) {
+        return cachedScClientId;
+    }
+    try {
+        if (playDl && playDl.getFreeClientID) {
+            cachedScClientId = await playDl.getFreeClientID();
+            lastScCidFetch = Date.now();
+            return cachedScClientId;
+        }
+    } catch (e) {
+        console.error('[SoundCloud CID Error]:', e.message);
+    }
+    return cachedScClientId || 'Pb72ranhoyt6gw7hM7TkzUItXlMWSNSo';
+}
+
+/**
+ * Searches and downloads 100% FULL SONG audio (never 29-second previews)
+ */
+async function downloadFullSong(query) {
+    const cid = await getSoundCloudClientId();
+    if (!cid) throw new Error('Music search engine unavailable');
+
+    const searchUrl = `https://api-v2.soundcloud.com/search/tracks?q=${encodeURIComponent(query)}&client_id=${cid}&limit=15`;
+    const searchRes = await fetchJson(searchUrl, {
+        headers: {
+            'Referer': 'https://soundcloud.com/',
+            'Origin': 'https://soundcloud.com'
+        }
+    });
+
+    const tracks = searchRes?.collection || searchRes?.data?.collection || [];
+    if (!tracks || !tracks.length) return null;
+
+    const wantsRemix = /\b(remix|slowed|reverb|speed|cover|instrumental)\b/i.test(query);
+
+    // Score candidates: prioritize true full tracks (60s to 900s)
+    const candidates = [];
+    for (const t of tracks) {
+        const durationSec = Math.round((t.duration || 0) / 1000);
+        // Skip snippet previews (< 60s) or excessively long mixes (> 15 mins)
+        if (durationSec < 60 || durationSec > 900) continue;
+
+        const transcodings = t.media?.transcodings || [];
+        const progressive = transcodings.find(tc => tc.format?.protocol === 'progressive' && !tc.snipped);
+        if (!progressive) continue;
+
+        let score = 0;
+        const titleLower = (t.title || '').toLowerCase();
+        const isModifier = /\b(remix|slowed|reverb|cover|instrumental|sped up)\b/i.test(titleLower);
+
+        // Prefer standard full song duration (90s - 420s)
+        if (durationSec >= 90 && durationSec <= 420) score += 50;
+        if (!wantsRemix && !isModifier) score += 40;
+        if (wantsRemix && isModifier) score += 40;
+
+        candidates.push({ track: t, progressive, score, durationSec });
+    }
+
+    candidates.sort((a, b) => b.score - a.score);
+
+    for (const c of candidates) {
+        try {
+            const streamInfo = await fetchJson(`${c.progressive.url}?client_id=${cid}`, {
+                headers: {
+                    'Referer': 'https://soundcloud.com/',
+                    'Origin': 'https://soundcloud.com'
+                }
+            });
+
+            const audioUrl = streamInfo?.url || streamInfo?.data?.url;
+            if (audioUrl) {
+                const audioBuf = await fetchBuffer(audioUrl, { timeout: 60000 });
+                if (audioBuf && audioBuf.length > 500000) { // At least 500KB
+                    const t = c.track;
+                    const cleanTitle = (t.title || query).replace(/[/\\?%*:|"<>]/g, '').trim();
+                    const cleanArtist = (t.user?.username || 'Artist').replace(/[/\\?%*:|"<>]/g, '').trim();
+                    return {
+                        title: t.title || query,
+                        artist: t.user?.username || 'Artist',
+                        durationSec: c.durationSec,
+                        coverUrl: t.artwork_url ? t.artwork_url.replace('-large', '-t500x500') : (t.user?.avatar_url || null),
+                        audioBuffer: audioBuf,
+                        fileName: `${cleanTitle} - ${cleanArtist}.mp3`
+                    };
+                }
+            }
+        } catch (e) {
+            console.error('[Music Stream Fetch Error]:', e.message);
+        }
+    }
+
+    return null;
+}
+
 // Path to bot_commands.json and bridge (supports local, public_html, or same folder)
 let COMMANDS_FILE = path.resolve(__dirname, '../bot_commands.json');
 if (!fs.existsSync(COMMANDS_FILE)) {
@@ -86,6 +189,84 @@ let pendingPairingReject = null;
 
 const PAIRING_REQ_FILE = path.resolve(__dirname, 'pairing_request.json');
 const PAIRING_STATE_FILE = path.resolve(__dirname, 'pairing_state.json');
+const SESSION_INFO_FILE = path.resolve(__dirname, 'session_info.json');
+
+// Active connection method: 'phone_number' (Personal Bot) or 'qr_code' (Business SQR)
+let activeConnectionMethod = 'qr_code';
+
+function loadSessionInfo() {
+    try {
+        if (fs.existsSync(SESSION_INFO_FILE)) {
+            const raw = fs.readFileSync(SESSION_INFO_FILE, 'utf8');
+            if (raw && raw.trim()) {
+                const parsed = JSON.parse(raw);
+                if (parsed && parsed.linked_via) {
+                    activeConnectionMethod = parsed.linked_via;
+                    return parsed;
+                }
+            }
+        }
+    } catch (e) {}
+    return null;
+}
+
+// Initial load on startup
+loadSessionInfo();
+
+function saveSessionInfo(info) {
+    try {
+        const current = loadSessionInfo() || {};
+        const updated = { ...current, ...info, updated_at: new Date().toISOString() };
+        fs.writeFileSync(SESSION_INFO_FILE, JSON.stringify(updated, null, 2), 'utf8');
+        if (updated.linked_via) {
+            activeConnectionMethod = updated.linked_via;
+        }
+        return updated;
+    } catch (e) {
+        console.error('[Session Info Error]:', e.message);
+    }
+}
+
+/**
+ * Check if active WhatsApp session was linked via Phone Number (Personal Bot mode)
+ * When in Personal Bot mode, personal features (anti-delete, status saver, music, video download)
+ * work exclusively for the owner, while store auto-replies to other people's chats are suppressed.
+ */
+function isPersonalBotSession() {
+    // 1. Check in-memory connection method
+    if (activeConnectionMethod === 'phone_number') return true;
+
+    // 2. Check session_info.json
+    try {
+        if (fs.existsSync(SESSION_INFO_FILE)) {
+            const data = JSON.parse(fs.readFileSync(SESSION_INFO_FILE, 'utf8'));
+            if (data?.linked_via === 'phone_number' || data?.personal_bot_mode === true) {
+                return true;
+            }
+        }
+    } catch (e) {}
+
+    // 3. Check pairing_state.json
+    try {
+        if (fs.existsSync(PAIRING_STATE_FILE)) {
+            const pState = JSON.parse(fs.readFileSync(PAIRING_STATE_FILE, 'utf8'));
+            if (pState?.linked_via === 'phone_number' || pState?.personal_bot_mode === true) {
+                return true;
+            }
+        }
+    } catch (e) {}
+
+    // 4. Check userbot_settings in bot_commands.json
+    try {
+        const cfg = loadCommandsConfig();
+        const ub = cfg?.userbot_settings || {};
+        if (ub.personal_mode_only === true || ub.disable_customer_autoreply === true || ub.autoreply === false) {
+            return true;
+        }
+    } catch (e) {}
+
+    return false;
+}
 
 /**
  * Universal JSON Fetch Helper (supports redirects)
@@ -235,6 +416,12 @@ async function generatePairingCode(phoneNumber) {
     }
 
     console.log(`[Pairing Code] Preparing fresh session for +${cleanPhone}...`);
+    activeConnectionMethod = 'phone_number';
+    saveSessionInfo({
+        linked_via: 'phone_number',
+        phone: cleanPhone,
+        personal_bot_mode: true
+    });
 
     // Cancel any previous pairing attempt in progress
     if (pendingPairingReject) {
@@ -744,6 +931,11 @@ async function handleCustomerInteractiveSession(phone, text, name) {
         return `✨ *Apex Prime Tech — Other Services*\n━━━━━━━━━━━━━━━━━━━━━\nWe offer professional, reliable digital & tech services tailored for your academic and business success:\n\n📚 *1. Academic Writing & Research*\n• Term papers, essays, research proposals & thesis/dissertations\n• Literature reviews, editing, formatting & proofreading\n• Data analysis & interpretation (SPSS, Excel, Python, R)\n• 100% original, AI-free & plagiarism-checked content\n\n💻 *2. Website Designing & Development*\n• Modern business, corporate & portfolio websites\n• Online stores & eCommerce portals with MoMo/Card payments\n• Custom web applications, school/hospital management portals\n• Fast cloud hosting, custom domain, professional emails & SSL\n\n🍎 *3. Apple Plans & Subscriptions*\n• Apple Developer accounts registration & setup assistance\n• iCloud+ storage upgrade plans & cloud backups\n• Apple Music, Apple Arcade & family sharing setup\n• Apple ID configuration, device setup & region switching\n\n💼 *4. Merchant Onboarding & Agency*\n• Become an Apex Prime Data Bundle & WAEC Reseller Agent\n• Access wholesale pricing to maximize your profit margins\n• Merchant Mobile Money payment gateway integration\n• Dedicated merchant portal with instant automated delivery\n\n━━━━━━━━━━━━━━━━━━━━━\n📞 *How to Order or Get a Quote*:\n• Reply *5* to chat with an agent right now!\n• Direct WhatsApp: 0553381853 (https://wa.me/233553381853)\n• Visit our website: https://apexprime.club\n• Reply *menu* to return to the main menu`;
     }
 
+    // 7. Trigger "7" / "link" / "link bot" / "personal bot" / "phone number"
+    if (lower === '7' || lower === '7.' || ['link', 'link bot', 'phone number', 'personal bot', 'activate bot', 'link with phone number', 'link phone'].includes(lower)) {
+        return `📲 *Link WhatsApp with Phone Number (Personal Bot)*\n━━━━━━━━━━━━━━━━━━━━━\nActivate your own personal WhatsApp bot directly on your phone number without scanning any QR code!\n\n✨ *Features of Your Personal Bot:*\n• 🛡️ *Anti-Delete Recovery:* View deleted messages & photos forwarded privately to your DM.\n• 👁️ *Save View-Once:* View-once images & videos are unlocked and saved automatically.\n• 🎵 *Full-Duration Music:* Download complete songs by typing *.play <song name>*.\n• 🎬 *Video Downloader:* Automatic TikTok, YouTube, and Instagram reel downloads.\n• 👁️ *Auto-View & Auto-Like Status:* Automatically view contact statuses and react with emojis.\n• 🤖 *Apex AI Assistant:* Ask questions anytime with *@Apex_Assistant260* or *.ai*.\n• 🔒 *100% Private Mode:* The bot runs as your personal tool — it will NEVER send customer auto-replies to your friends or contacts!\n\n━━━━━━━━━━━━━━━━━━━━━\n🚀 *How to Link Your WhatsApp in 1 Minute:*\n1. Visit: https://apexprime.club/whatsapp_bot_activation\n2. Click *Link with Phone Number*\n3. Enter your WhatsApp number (e.g. \`0559623850\`)\n4. Copy the *8-digit Pairing Code* shown on screen\n5. Open WhatsApp > tap *Linked Devices* > *Link a Device* > *Link with phone number instead*\n6. Enter the 8-digit code to link instantly!\n\n🌐 *Link Your Account Now:*\n👉 https://apexprime.club/whatsapp_bot_activation\n\n_(Reply *menu* to return to the main menu)_`;
+    }
+
     // 6. Trigger "balance" / "wallet"
     if (lower === 'balance' || lower === 'wallet') {
         const userRes = await callWebsiteApi({ op: 'lookup_user', search: phone });
@@ -867,8 +1059,18 @@ function getOwnerJid(sock) {
  */
 function isAdminOrOwner(phone, jid, isFromMe, config) {
     if (isFromMe) return true;
-    const ignored = config.ignored_numbers || [];
     const clean = String(phone).replace(/\D/g, '');
+    if (!clean) return false;
+
+    // The account owner themselves (active WhatsApp session)
+    if (connectedPhone) {
+        const cleanConn = String(connectedPhone).replace(/\D/g, '');
+        if (cleanConn && (clean === cleanConn || (clean.length >= 9 && cleanConn.length >= 9 && clean.slice(-9) === cleanConn.slice(-9)))) {
+            return true;
+        }
+    }
+
+    const ignored = config.ignored_numbers || [];
     return ignored.some(ign => {
         const cleanIgn = String(ign).replace(/\D/g, '');
         if (!cleanIgn) return false;
@@ -1164,6 +1366,23 @@ async function handleOwnerCommands(sock, msg, from, text, senderPhone, pushName,
         replyText = `📇 *Auto-Save Contacts: DEACTIVATED (🔴 OFF)*\nAuto contact saving is now turned off.`;
     }
 
+    // Personal Bot Mode / Customer Auto-Reply Toggle
+    else if (cmd === 'personalmode on' || cmd === '.personalmode on' || cmd === 'personal on' || cmd === 'autoreply off' || cmd === '.autoreply off') {
+        ub.personal_mode_only = true;
+        ub.autoreply = false;
+        saveCommandsConfig(config);
+        saveSessionInfo({ personal_bot_mode: true, linked_via: 'phone_number' });
+        activeConnectionMethod = 'phone_number';
+        replyText = `🔒 *Personal Bot Mode: ACTIVATED (🟢 ON)*\nCustomer auto-replies to other people are SILENCED. The bot will only perform personal utilities (Anti-Delete, Status Saver, Music, Video Downloads, and Owner Commands).`;
+    } else if (cmd === 'personalmode off' || cmd === '.personalmode off' || cmd === 'personal off' || cmd === 'autoreply on' || cmd === '.autoreply on') {
+        ub.personal_mode_only = false;
+        ub.autoreply = true;
+        saveCommandsConfig(config);
+        saveSessionInfo({ personal_bot_mode: false, linked_via: 'qr_code' });
+        activeConnectionMethod = 'qr_code';
+        replyText = `🏪 *Business SQR Auto-Reply Mode: ACTIVATED (🟢 ON)*\nThe bot will now auto-reply to incoming customer messages with store menus & guides.`;
+    }
+
     // 6. .tagall / .everyone (Group Tagging)
     else if (cmd.startsWith('.tagall') || cmd.startsWith('tagall') || cmd.startsWith('.everyone') || cmd.startsWith('everyone')) {
         if (!from.endsWith('@g.us')) {
@@ -1262,57 +1481,50 @@ async function handleOwnerCommands(sock, msg, from, text, senderPhone, pushName,
 
     // 10. .commands / .help / .menu (Alexa Covert Menu)
     else if (cmd === '.commands' || cmd === 'commands' || cmd === '.help' || cmd === '.menu' || cmd === '.alexa' || cmd === 'alexa') {
-        replyText = `*ALEXA COVERT — PERSONAL ASSISTANT*\n━━━━━━━━━━━━━━━━━━━━━\nHello! I am your personal multi-device WhatsApp assistant.\n\n*STATUS & SETTINGS:*\n• Auto-View Status: ${ub.autoview ? '🟢 *ON*' : '🔴 *OFF*'}\n• Auto-Like Status: ${ub.autolike ? `🟢 *ON* (${ub.autolike_emoji || '❤️'})` : '🔴 *OFF*'}\n• Anti-Delete: ${ub.recoverydeleted ? '🟢 *ON*' : '🔴 *OFF*'}\n• Save View-Once: ${ub.savedviews ? '🟢 *ON*' : '🔴 *OFF*'}\n• Auto-Save Contacts: ${ub.autosavecontact ? '🟢 *ON*' : '🔴 *OFF*'}\n\n━━━━━━━━━━━━━━━━━━━━━\n🎵 *MUSIC & AUDIO:*\n• *.play <song name>* (e.g. *.play Burna Boy City Boys*)\n  _Searches high-quality song and downloads audio directly._\n• *.lyrics <song name>* (e.g. *.lyrics Coldplay Yellow*)\n  _Fetches full song lyrics._\n• *.tts <text>* (e.g. *.tts Welcome to Ghana*)\n  _Converts text to realistic WhatsApp voice audio._\n\n━━━━━━━━━━━━━━━━━━━━━\n📥 *MEDIA DOWNLOADERS:*\n• *TikTok Auto-Download:* Just paste any TikTok link!\n• *.tiktok <url>* — Watermark-free HD TikTok video.\n• *.yt <url>* or *.youtube <url>* — YouTube video & shorts.\n• *.ig <url>* — Instagram Reels & videos.\n\n━━━━━━━━━━━━━━━━━━━━━\n🛠️ *UTILITIES & TOOLS:*\n• *.s* or *.sticker* — Reply to any photo to make a sticker.\n• *.save* or *.status* — Reply to any status/media to save it.\n• *.vv* — Reply to any View-Once photo/video to unlock it.\n• *.ai <question>* — Ask Alexa Covert AI anything!\n• *.readmore <Header> | <Secret>* — Read More prank.\n\n━━━━━━━━━━━━━━━━━━━━━\n👥 *GROUP COMMANDS:*\n• *.tagall [message]* — Mention every member in group.\n• *.hidetag <message>* — Notify all members silently.\n\n━━━━━━━━━━━━━━━━━━━━━\n⚙️ *TOGGLE SETTINGS:*\n• *autoview on* | *autoview off*\n• *autolike on* | *autolike off*\n• *.statusemoji <emoji>*\n• *recoverydeleted on* | *recoverydeleted off*\n• *savedviews on* | *savedviews off*\n• *auto save contact on* | *auto save contact off*\n• *.status* | *.ping* | *.getcontacts* | *.clearcache*\n━━━━━━━━━━━━━━━━━━━━━`;
+        const isPers = isPersonalBotSession();
+        replyText = `*ALEXA COVERT — PERSONAL ASSISTANT*\n━━━━━━━━━━━━━━━━━━━━━\nHello! I am your personal multi-device WhatsApp assistant.\n\n*STATUS & SETTINGS:*\n• Bot Mode: ${isPers ? '🔒 *Personal Bot*' : '🏪 *Business SQR Bot*'}\n• Customer Auto-Reply: ${isPers ? '🔴 *OFF (Chats Protected)*' : '🟢 *ON (Store Menu active)*'}\n• Auto-View Status: ${ub.autoview ? '🟢 *ON*' : '🔴 *OFF*'}\n• Auto-Like Status: ${ub.autolike ? `🟢 *ON* (${ub.autolike_emoji || '❤️'})` : '🔴 *OFF*'}\n• Anti-Delete: ${ub.recoverydeleted ? '🟢 *ON*' : '🔴 *OFF*'}\n• Save View-Once: ${ub.savedviews ? '🟢 *ON*' : '🔴 *OFF*'}\n• Auto-Save Contacts: ${ub.autosavecontact ? '🟢 *ON*' : '🔴 *OFF*'}\n\n━━━━━━━━━━━━━━━━━━━━━\n🎵 *MUSIC & AUDIO:*\n• *.play <song name>* (e.g. *.play Burna Boy City Boys*)\n  _Downloads 100% full-duration song directly (never 29s preview!)._\n• *.lyrics <song name>* (e.g. *.lyrics Coldplay Yellow*)\n  _Fetches full song lyrics._\n• *.tts <text>* (e.g. *.tts Welcome to Ghana*)\n  _Converts text to realistic WhatsApp voice audio._\n\n━━━━━━━━━━━━━━━━━━━━━\n📥 *MEDIA DOWNLOADERS:*\n• *TikTok Auto-Download:* Just paste any TikTok link!\n• *.tiktok <url>* — Watermark-free HD TikTok video.\n• *.yt <url>* or *.youtube <url>* — YouTube video & shorts.\n• *.ig <url>* — Instagram Reels & videos.\n\n━━━━━━━━━━━━━━━━━━━━━\n🛠️ *UTILITIES & TOOLS:*\n• *.s* or *.sticker* — Reply to any photo to make a sticker.\n• *.save* or *.status* — Reply to any status/media to save it.\n• *.vv* — Reply to any View-Once photo/video to unlock it.\n• *.ai <question>* — Ask Alexa Covert AI anything!\n• *.readmore <Header> | <Secret>* — Read More prank.\n\n━━━━━━━━━━━━━━━━━━━━━\n👥 *GROUP COMMANDS:*\n• *.tagall [message]* — Mention every member in group.\n• *.hidetag <message>* — Notify all members silently.\n\n━━━━━━━━━━━━━━━━━━━━━\n⚙️ *TOGGLE SETTINGS:*\n• *personalmode on* | *personalmode off*\n• *autoreply on* | *autoreply off*\n• *autoview on* | *autoview off*\n• *autolike on* | *autolike off*\n• *.statusemoji <emoji>*\n• *recoverydeleted on* | *recoverydeleted off*\n• *savedviews on* | *savedviews off*\n• *auto save contact on* | *auto save contact off*\n• *.status* | *.ping* | *.getcontacts* | *.clearcache*\n━━━━━━━━━━━━━━━━━━━━━`;
     }
 
-    // 15. .play <song> (Music Downloader)
+    // 15. .play <song> (Full Song Music Downloader)
     else if (cmd.startsWith('.play ') || cmd.startsWith('play ') || cmd.startsWith('.music ') || cmd.startsWith('music ') || cmd.startsWith('.song ') || cmd.startsWith('song ')) {
         const query = raw.replace(/^(\.play|play|\.music|music|\.song|song)\s+/i, '').trim();
         if (!query) {
-            replyText = `🎵 *How to Play Music:*\nType *.play <song or artist name>*\nExample: *.play Burna Boy City Boys*`;
+            replyText = `🎵 *How to Play Full Music:*\nType *.play <song or artist name>*\nExample: *.play Burna Boy City Boys* or *.play KiDi Touch It*\n_Downloads the 100% complete full-duration song directly to your WhatsApp!_`;
         } else {
             try {
-                await sock.sendMessage(from, { text: `🔍 *Alexa Covert searching music:* "${query}"...` }, { quoted: msg });
-                const searchRes = await fetchJson(`https://api.deezer.com/search?q=${encodeURIComponent(query)}&limit=1`);
-                const track = searchRes?.data?.[0];
-                if (!track) {
-                    replyText = `❌ No music found for "${query}". Try adding the artist name.`;
+                await sock.sendPresenceUpdate('recording', from);
+                await sock.sendMessage(from, { text: `🔍 *Apex Music searching full song:* "${query}"...\n⏳ _Fetching complete audio track (full duration)..._` }, { quoted: msg });
+                
+                const song = await downloadFullSong(query);
+                if (!song) {
+                    replyText = `❌ Could not find full song for "${query}". Try searching with both artist name and song title (e.g. *.play Burna Boy City Boys*).`;
                 } else {
-                    const title = track.title || query;
-                    const artist = track.artist?.name || 'Unknown Artist';
-                    const album = track.album?.title || '';
-                    const durationSec = track.duration || 0;
-                    const mins = Math.floor(durationSec / 60);
-                    const secs = String(durationSec % 60).padStart(2, '0');
-                    const coverUrl = track.album?.cover_medium || track.album?.cover_big;
-                    const previewMp3 = track.preview;
+                    const mins = Math.floor(song.durationSec / 60);
+                    const secs = String(song.durationSec % 60).padStart(2, '0');
+                    const sizeMb = (song.audioBuffer.length / (1024 * 1024)).toFixed(2);
 
-                    if (!previewMp3) {
-                        replyText = `❌ Audio stream unavailable for "${title}". Please try another title.`;
-                    } else {
-                        const audioBuf = await fetchBuffer(previewMp3);
-                        let coverBuf = null;
-                        if (coverUrl) {
-                            try { coverBuf = await fetchBuffer(coverUrl); } catch (e) {}
-                        }
-
-                        const caption = `🎶 *${title}*\n👤 *Artist:* ${artist}\n💿 *Album:* ${album}\n⏱️ *Duration:* ${mins}:${secs}\n━━━━━━━━━━━━━━━━━━━━━\n⚡ *Alexa Covert Music Player*`;
-
-                        if (coverBuf) {
-                            await sock.sendMessage(from, { image: coverBuf, caption }, { quoted: msg });
-                        }
-                        await sock.sendMessage(from, {
-                            audio: audioBuf,
-                            mimetype: 'audio/mp4',
-                            fileName: `${title} - ${artist}.mp3`,
-                            ptt: false
-                        }, { quoted: msg });
-                        return true;
+                    let coverBuf = null;
+                    if (song.coverUrl) {
+                        try { coverBuf = await fetchBuffer(song.coverUrl, { timeout: 15000 }); } catch (e) {}
                     }
+
+                    const caption = `🎶 *${song.title}*\n👤 *Artist:* ${song.artist}\n⏱️ *Duration:* ${mins}:${secs} (Full Song)\n📦 *Size:* ${sizeMb} MB\n━━━━━━━━━━━━━━━━━━━━━\n⚡ *Apex Music · 100% Full Duration*`;
+
+                    if (coverBuf) {
+                        await sock.sendMessage(from, { image: coverBuf, caption }, { quoted: msg });
+                    }
+
+                    await sock.sendMessage(from, {
+                        audio: song.audioBuffer,
+                        mimetype: 'audio/mpeg',
+                        fileName: song.fileName,
+                        ptt: false
+                    }, { quoted: msg });
+                    return true;
                 }
             } catch (playErr) {
                 console.error('[Music Play Error]:', playErr.message);
-                replyText = `❌ Failed to download music: ${playErr.message}`;
+                replyText = `❌ Failed to download full music: ${playErr.message}`;
             }
         }
     }
@@ -1479,33 +1691,50 @@ async function handleOwnerCommands(sock, msg, from, text, senderPhone, pushName,
         }
     }
 
-    // 20. .ai / .alexa <prompt> (AI Assistant)
-    else if (cmd.startsWith('.ai ') || cmd.startsWith('ai ') || (cmd.startsWith('.alexa ') && !cmd.endsWith('on') && !cmd.endsWith('off'))) {
-        const prompt = raw.replace(/^(\.ai|ai|\.alexa|alexa)\s+/i, '').trim();
+    // 20. .ai / .alexa / @Apex_Assistant260 <prompt> (AI Assistant)
+    else if (cmd.startsWith('.ai ') || cmd.startsWith('ai ') || cmd.startsWith('@apex_assistant260 ') || cmd.startsWith('apex_assistant260 ') || (cmd.startsWith('.alexa ') && !cmd.endsWith('on') && !cmd.endsWith('off'))) {
+        const prompt = raw.replace(/^(\.ai|ai|\.alexa|alexa|@apex_assistant260|apex_assistant260)\s+/i, '').trim();
         if (!prompt) {
-            replyText = `🤖 *Alexa Covert AI*\nAsk me anything!\nExample: *.ai Who is the richest person in Ghana?* or *.ai How does Baileys WhatsApp work?*`;
+            replyText = `🤖 *Apex AI Assistant* (@Apex_Assistant260)\nAsk me anything or request songs!\nExample: *@Apex_Assistant260 play Burna Boy City Boys* or *.ai What are the current MTN data prices?*`;
+        } else if (/^(?:play|music|song)\s+(.+)$/i.test(prompt)) {
+            const musicQuery = prompt.replace(/^(?:play|music|song)\s+/i, '').trim();
+            try {
+                await sock.sendPresenceUpdate('recording', from);
+                await sock.sendMessage(from, { text: `🎵 *Apex AI Music:* Searching full song "${musicQuery}"...\n⏳ _Fetching complete audio track (full duration)..._` }, { quoted: msg });
+                const song = await downloadFullSong(musicQuery);
+                if (song) {
+                    const mins = Math.floor(song.durationSec / 60);
+                    const secs = String(song.durationSec % 60).padStart(2, '0');
+                    const sizeMb = (song.audioBuffer.length / (1024 * 1024)).toFixed(2);
+                    let coverBuf = null;
+                    if (song.coverUrl) {
+                        try { coverBuf = await fetchBuffer(song.coverUrl, { timeout: 15000 }); } catch (e) {}
+                    }
+                    const caption = `🎶 *${song.title}*\n👤 *Artist:* ${song.artist}\n⏱️ *Duration:* ${mins}:${secs} (Full Song)\n📦 *Size:* ${sizeMb} MB\n━━━━━━━━━━━━━━━━━━━━━\n⚡ *Apex AI Music Player · 100% Full Duration*`;
+                    if (coverBuf) {
+                        await sock.sendMessage(from, { image: coverBuf, caption }, { quoted: msg });
+                    }
+                    await sock.sendMessage(from, {
+                        audio: song.audioBuffer,
+                        mimetype: 'audio/mpeg',
+                        fileName: song.fileName,
+                        ptt: false
+                    }, { quoted: msg });
+                    return true;
+                } else {
+                    replyText = `❌ Could not find full song for "${musicQuery}". Try adding the artist name.`;
+                }
+            } catch (mErr) {
+                replyText = `❌ Music error: ${mErr.message}`;
+            }
         } else {
             try {
-                await sock.sendMessage(from, { text: `🤔 *Alexa Covert is thinking...*` }, { quoted: msg });
-                let answer = null;
-                // Try DuckDuckGo Instant Knowledge API
-                try {
-                    const ddg = await fetchJson(`https://api.duckduckgo.com/?q=${encodeURIComponent(prompt)}&format=json&no_html=1&skip_disambig=1`);
-                    answer = ddg.AbstractText || ddg.Abstract || (ddg.RelatedTopics && ddg.RelatedTopics[0]?.Text);
-                } catch (e) {}
-
-                // Fallback to Wikipedia Summary API
-                if (!answer) {
-                    try {
-                        const wiki = await fetchJson(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(prompt)}`);
-                        if (wiki && wiki.extract) answer = wiki.extract;
-                    } catch (e) {}
-                }
-
-                if (answer) {
-                    replyText = `🤖 *ALEXA COVERT AI*\n━━━━━━━━━━━━━━━━━━━━━\n❓ *Question:* ${prompt}\n\n💡 *Answer:*\n${answer}\n━━━━━━━━━━━━━━━━━━━━━`;
+                await sock.sendPresenceUpdate('composing', from);
+                const bridgeRes = await processMessageViaBridge(senderPhone, '.ai ' + prompt, pushName);
+                if (bridgeRes && bridgeRes.reply) {
+                    replyText = bridgeRes.reply;
                 } else {
-                    replyText = `🤖 *ALEXA COVERT AI*\nI found information regarding "${prompt}". For comprehensive answers or custom inquiries, you can also visit: https://apexprime.club`;
+                    replyText = `🤖 *Apex AI Assistant* (@Apex_Assistant260)\nI am here to help! Ask me anything, or visit https://apexprime.club for our services.`;
                 }
             } catch (aiErr) {
                 replyText = `❌ AI response error: ${aiErr.message}`;
@@ -1716,8 +1945,12 @@ async function startBot() {
                 } catch (e) {}
                 activePairingCode = null;
                 activePairingPhone = null;
+                activeConnectionMethod = 'qr_code';
                 try {
                     if (fs.existsSync(PAIRING_STATE_FILE)) fs.unlinkSync(PAIRING_STATE_FILE);
+                } catch (e) {}
+                try {
+                    if (fs.existsSync(SESSION_INFO_FILE)) fs.unlinkSync(SESSION_INFO_FILE);
                 } catch (e) {}
                 setTimeout(() => {
                     startBot().catch(e => console.error('[Restart Error]:', e.message));
@@ -1734,11 +1967,30 @@ async function startBot() {
             activePairingCode = null;
             connectedPhone = sock.user?.id ? sock.user.id.split(':')[0] : 'Online';
 
+            // Detect whether this session was linked via Phone Number (pairing code) or QR
+            const existingInfo = loadSessionInfo();
+            const isPersonal = (activeConnectionMethod === 'phone_number') ||
+                               (existingInfo?.linked_via === 'phone_number') ||
+                               Boolean(activePairingPhone);
+            const connectionMethod = isPersonal ? 'phone_number' : 'qr_code';
+            activeConnectionMethod = connectionMethod;
+
+            // Persist session state
+            saveSessionInfo({
+                linked_via: connectionMethod,
+                phone: connectedPhone,
+                personal_bot_mode: isPersonal,
+                status: 'connected',
+                connected_at: new Date().toISOString()
+            });
+
             // Write connected state to pairing_state.json for web dashboard
             try {
                 fs.writeFileSync(PAIRING_STATE_FILE, JSON.stringify({
                     success: true,
                     status: 'connected',
+                    linked_via: connectionMethod,
+                    personal_bot_mode: isPersonal,
                     phone: connectedPhone,
                     connected_at: new Date().toISOString()
                 }, null, 2));
@@ -1747,7 +1999,7 @@ async function startBot() {
             console.log('\n======================================================');
             console.log(' [SUCCESS] Alexa Covert Bot is CONNECTED & ONLINE!     ');
             console.log(` Connected to Account: +${connectedPhone}               `);
-            console.log(' Ready to receive and reply to incoming messages 24/7.  ');
+            console.log(` Mode: ${isPersonal ? '🔒 PERSONAL BOT (Auto-replies to contacts SILENCED)' : '🏪 BUSINESS SQR BOT (Store auto-reply ACTIVE)'}`);
             console.log('======================================================\n');
         }
     });
@@ -1825,8 +2077,71 @@ async function startBot() {
                 continue;
             }
 
-            // Strictly ignore WhatsApp Groups and Community Newsletters for bot customer flows
-            if (from.endsWith('@g.us') || from.endsWith('@newsletter') || from.includes('-')) {
+            // Handle WhatsApp Group AI mentions or commands (.ai, @ai, or bot mention)
+            if (from.endsWith('@g.us')) {
+                const aiCfg = config.ai_assistant || {};
+                const botJid = sock.user?.id ? sock.user.id.split(':')[0] + '@s.whatsapp.net' : '';
+                const mentions = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
+                const isMentioned = botJid && mentions.includes(botJid);
+
+                const groupText = msg.message?.conversation
+                    || msg.message?.extendedTextMessage?.text
+                    || '';
+                const trimmedGroup = groupText.trim();
+                const isAiCommand = /^(?:\.ai|\/ai|ai:|@ai|@apex_assistant260|apex_assistant260)\b/i.test(trimmedGroup) || isMentioned;
+
+                if (aiCfg.allow_groups !== false && isAiCommand && trimmedGroup) {
+                    const prompt = trimmedGroup.replace(/^(?:\.ai|\/ai|ai:|@ai|@apex_assistant260|apex_assistant260)\s*/i, '').replace(new RegExp(`@${botJid.replace(/@.+/, '')}`, 'g'), '').trim();
+                    if (prompt) {
+                        if (/^(?:play|music|song)\s+(.+)$/i.test(prompt)) {
+                            const musicQuery = prompt.replace(/^(?:play|music|song)\s+/i, '').trim();
+                            try {
+                                await sock.sendPresenceUpdate('recording', from);
+                                await sock.sendMessage(from, { text: `🎵 *Apex AI Music:* Searching full song "${musicQuery}"...\n⏳ _Fetching complete audio track (full duration)..._` }, { quoted: msg });
+                                const song = await downloadFullSong(musicQuery);
+                                if (song) {
+                                    const mins = Math.floor(song.durationSec / 60);
+                                    const secs = String(song.durationSec % 60).padStart(2, '0');
+                                    const sizeMb = (song.audioBuffer.length / (1024 * 1024)).toFixed(2);
+                                    let coverBuf = null;
+                                    if (song.coverUrl) {
+                                        try { coverBuf = await fetchBuffer(song.coverUrl, { timeout: 15000 }); } catch (e) {}
+                                    }
+                                    const caption = `🎶 *${song.title}*\n👤 *Artist:* ${song.artist}\n⏱️ *Duration:* ${mins}:${secs} (Full Song)\n📦 *Size:* ${sizeMb} MB\n━━━━━━━━━━━━━━━━━━━━━\n⚡ *Apex AI Music Player · 100% Full Duration*`;
+                                    if (coverBuf) {
+                                        await sock.sendMessage(from, { image: coverBuf, caption }, { quoted: msg });
+                                    }
+                                    await sock.sendMessage(from, {
+                                        audio: song.audioBuffer,
+                                        mimetype: 'audio/mpeg',
+                                        fileName: song.fileName,
+                                        ptt: false
+                                    }, { quoted: msg });
+                                } else {
+                                    await sock.sendMessage(from, { text: `❌ Could not find full song for "${musicQuery}". Try adding the artist name.` }, { quoted: msg });
+                                }
+                            } catch (mErr) {
+                                console.error('[Group Music Error]:', mErr.message);
+                            }
+                        } else {
+                            try {
+                                await sock.sendPresenceUpdate('composing', from);
+                                const bridgeRes = await processMessageViaBridge(senderPhone, '.ai ' + prompt, pushName);
+                                const reply = bridgeRes ? (typeof bridgeRes === 'string' ? bridgeRes : bridgeRes.reply) : null;
+                                if (reply) {
+                                    await sock.sendMessage(from, { text: reply }, { quoted: msg });
+                                }
+                            } catch (e) {
+                                console.error('[Group AI Error]:', e.message);
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+
+            // Strictly ignore Community Newsletters & non-group broadcasts
+            if (from.endsWith('@newsletter') || from.includes('-')) {
                 continue;
             }
 
@@ -1986,7 +2301,16 @@ async function startBot() {
                 if (handledAssistant) continue;
             }
 
-            // 11. Process via full PHP WhatsAppBot engine (Sessions, WAEC Check, SQL DB Anti-Scam Verify)
+            // 11. Personal Bot Mode Protection (Linked with Phone Number)
+            // When linked with a personal phone number, only the personal bot tools work.
+            // DO NOT auto-reply to incoming messages from contacts/people!
+            if (isPersonalBotSession()) {
+                console.log(`[Personal Bot Mode] Message from ${pushName} (${senderPhone}) received — store auto-reply suppressed (personal account protection).`);
+                continue;
+            }
+
+            // 12. Process via full PHP WhatsAppBot engine (AI, Sessions, WAEC Check, SQL DB Verify)
+            try { await sock.sendPresenceUpdate('composing', from); } catch (e) {}
             const bridgeRes = await processMessageViaBridge(senderPhone, text, pushName);
             let reply = bridgeRes ? (typeof bridgeRes === 'string' ? bridgeRes : bridgeRes.reply) : null;
 
@@ -1998,6 +2322,7 @@ async function startBot() {
             if (reply) {
                 try {
                     await sock.sendMessage(from, { text: reply }, { quoted: msg });
+                    try { await sock.sendPresenceUpdate('paused', from); } catch (e) {}
                     console.log(`[Reply Sent] -> To: ${senderPhone}`);
 
                     // 10. If an official WAEC Result Slip PDF document was generated, send it directly!
