@@ -82,8 +82,16 @@ class WaecResultChecker {
                 $jsonStr = substr($output, strpos($output, '--- RESULT JSON OUTPUT ---') + strlen('--- RESULT JSON OUTPUT ---'));
                 $data = json_decode(trim($jsonStr), true);
                 if (is_array($data) && (isset($data['success']) || isset($data['reply']))) {
-                    if (!empty($data['image_path'])) {
-                        $GLOBALS['waec_latest_image'] = $data['image_path'];
+                    if (!empty($data['image_path']) || !empty($data['image_file'])) {
+                        $GLOBALS['waec_latest_image'] = $data['image_file'] ?? $data['image_path'];
+                    }
+                    if (!empty($data['pdf_file']) && file_exists($data['pdf_file'])) {
+                        $GLOBALS['waec_latest_pdf'] = [
+                            'file_path'      => $data['pdf_file'],
+                            'file_name'      => $data['pdf_name'] ?? basename($data['pdf_file']),
+                            'candidate_name' => $data['candidate_name'] ?? null,
+                            'index_number'   => $data['index_number'] ?? $cleanIndex
+                        ];
                     }
                     return $data;
                 }
