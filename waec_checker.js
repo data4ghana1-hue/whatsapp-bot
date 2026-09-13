@@ -395,32 +395,71 @@ async function checkWassceDirect(browser, cleanIndex, cleanYear, typeCode, examT
         };
     }
 
-    // Parse Valid Result Slip
-    let candidateName = '';
-    let schoolName = '';
-    let cardUse = '1 of 3';
+    const structuredData = await activePage.evaluate(() => {
+        const data = {
+            candidateName: '',
+            indexNumber: '',
+            examType: '',
+            schoolName: '',
+            cardUse: '',
+            subjects: []
+        };
 
-    const nameMatch = bodyText.match(/Candidate(?:\'s)?\s*Name[:\s]*([A-Z\s\.\-]{3,60})/i);
-    if (nameMatch) {
-        candidateName = nameMatch[1].replace(/Index|Number|School|Exam/gi, '').trim();
+        const rows = Array.from(document.querySelectorAll('tr'));
+        for (const row of rows) {
+            const cells = Array.from(row.querySelectorAll('td, th')).map(c => c.innerText.trim());
+            if (cells.length >= 2) {
+                const label = cells[0].toLowerCase();
+                const val = cells[1];
+                if (label.includes('candidate name')) data.candidateName = val;
+                else if (label.includes('index number')) data.indexNumber = val;
+                else if (label.includes('type of examination')) data.examType = val;
+                else if (label.includes('examination centre') || label.includes('school')) data.schoolName = val;
+                else if (label.includes('card use')) data.cardUse = val;
+            }
+            if (cells.length >= 3) {
+                const sub = cells[0];
+                const grd = cells[1];
+                const rmk = cells[2];
+                // Subject row check
+                if (/^[A-Z\s\/\(\)\-]+$/i.test(sub) && /^[A-Z][0-9]|[1-9]$/i.test(grd) && !sub.toLowerCase().includes('index') && !sub.toLowerCase().includes('candidate') && !sub.toLowerCase().includes('results')) {
+                    data.subjects.push({ subject: sub, grade: grd, remark: rmk });
+                }
+            }
+        }
+        return data;
+    });
+
+    // Parse Valid Result Slip
+    let candidateName = structuredData.candidateName;
+    let schoolName = structuredData.schoolName;
+    let cardUse = structuredData.cardUse || '1 of 3';
+
+    if (!candidateName) {
+        const nameMatch = bodyText.match(/Candidate(?:\'s)?\s*Name[:\s]*([A-Z\s\.\-]{3,60})/i);
+        if (nameMatch) {
+            candidateName = nameMatch[1].replace(/Index|Number|School|Exam/gi, '').trim();
+        }
     }
     if (!candidateName) candidateName = `CANDIDATE (${cleanIndex})`;
 
-    const schoolMatch = bodyText.match(/(?:School|Centre|Center)[:\s]*([A-Z0-9\s\.\-]{3,80})/i);
-    if (schoolMatch) schoolName = schoolMatch[1].trim();
+    if (!schoolName) {
+        const schoolMatch = bodyText.match(/(?:School|Centre|Center)[:\s]*([A-Z0-9\s\.\-]{3,80})/i);
+        if (schoolMatch) schoolName = schoolMatch[1].trim();
+    }
 
-    const useMatch = bodyText.match(/Card\s*use[:\s]*([0-9]\s*of\s*[0-9])/i);
-    if (useMatch) cardUse = useMatch[1].trim();
-
-    const subjectRegex = /([A-Z\s\/\(\)]+?)\s+([A-Z][0-9]|[1-9])\s+([A-Z\s]+)/gi;
-    const subjects = [];
-    let sm;
-    while ((sm = subjectRegex.exec(bodyText)) !== null) {
-        const sub = sm[1].trim();
-        const grd = sm[2].trim();
-        const rmk = sm[3].trim();
-        if (sub.length >= 3 && !['EXAMINATION', 'INDEX', 'CANDIDATE', 'DATE OF BIRTH'].includes(sub.toUpperCase())) {
-            subjects.push({ subject: sub, grade: grd, remark: rmk });
+    let subjects = structuredData.subjects;
+    if (!subjects || subjects.length === 0) {
+        const subjectRegex = /([A-Z\s\/\(\)]+?)\s+([A-Z][0-9]|[1-9])\s+([A-Z\s]+)/gi;
+        subjects = [];
+        let sm;
+        while ((sm = subjectRegex.exec(bodyText)) !== null) {
+            const sub = sm[1].trim();
+            const grd = sm[2].trim();
+            const rmk = sm[3].trim();
+            if (sub.length >= 3 && !['EXAMINATION', 'INDEX', 'CANDIDATE', 'DATE OF BIRTH', 'RESULTS'].includes(sub.toUpperCase())) {
+                subjects.push({ subject: sub, grade: grd, remark: rmk });
+            }
         }
     }
 

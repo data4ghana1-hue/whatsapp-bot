@@ -404,6 +404,94 @@ class WhatsAppBot {
     }
 
     /**
+     * Universal extractor for WAEC / BECE credentials from any text message in any order or formatting
+     */
+    public static function extractWaecCredentialsFromText(string $raw): array {
+        $clean = trim($raw);
+
+        // 1. Detect Exam Type
+        $examType = 'W.A.S.S.C.E. (School)';
+        $isBece = preg_match('/\b(?:bece|b\.e\.c\.e)\b/i', $clean);
+        $isPrivate = preg_match('/\b(?:private|novdec|nov-dec|nov\/dec|pwas|pbec)\b/i', $clean);
+
+        if ($isBece) {
+            $examType = $isPrivate ? 'B.E.C.E. (Private)' : 'B.E.C.E.';
+        } else {
+            $examType = $isPrivate ? 'W.A.S.S.C.E. (Private)' : 'W.A.S.S.C.E. (School)';
+        }
+
+        // 2. Extract PIN
+        $pin = '';
+        if (preg_match('/(?:pin|card\s*pin|code|pin\s*code|voucher\s*pin)[:\s=]*([0-9]{10,14})/i', $clean, $pm)) {
+            $pin = $pm[1];
+        }
+
+        // 3. Extract Serial
+        $serial = '';
+        if (preg_match('/(?:card\s*serial|voucher\s*serial|serial\s*(?:number|num|no)?|s\/n|sn)[:\s=]*([a-zA-Z0-9_\-]{6,30})/i', $clean, $sm)) {
+            $sCand = strtoupper(trim($sm[1]));
+            if ($sCand !== 'NUMBER' && $sCand !== 'NO') $serial = $sCand;
+        }
+
+        // 4. Extract Year
+        $year = '';
+        if (preg_match('/(?:year|exam\s*year|session|examyear|year\s*is)[:\s=]*([12]\d{3})/i', $clean, $ym)) {
+            $year = $ym[1];
+        }
+
+        // 5. Extract Index Number
+        $indexNumber = '';
+        if (preg_match('/(?:index|index\s*no|index\s*number|candid|candidate)[:\s=]*([0-9]{10})/i', $clean, $im)) {
+            $indexNumber = $im[1];
+        }
+
+        // Remaining token search
+        $remaining = $clean;
+        if (!empty($pin)) $remaining = str_replace($pin, ' ', $remaining);
+        if (!empty($serial)) $remaining = str_ireplace($serial, ' ', $remaining);
+        if (!empty($year)) $remaining = str_replace($year, ' ', $remaining);
+        if (!empty($indexNumber)) $remaining = str_replace($indexNumber, ' ', $remaining);
+
+        if (empty($indexNumber) && preg_match('/\b([0-9]{10})\b/', $remaining, $im2)) {
+            $indexNumber = $im2[1];
+            $remaining = str_replace($indexNumber, ' ', $remaining);
+        }
+
+        if (empty($year) && preg_match('/\b(199[5-9]|20[0-3]\d)\b/', $remaining, $ym2)) {
+            $year = $ym2[1];
+            $remaining = str_replace($year, ' ', $remaining);
+        }
+
+        if (empty($serial)) {
+            if (preg_match('/\b((?:WSC|WGR|BCE|WAEC)[A-Za-z0-9_\-]{5,20})\b/i', $remaining, $sm2)) {
+                $serial = strtoupper($sm2[1]);
+                $remaining = str_ireplace($serial, ' ', $remaining);
+            } elseif (preg_match('/\b([A-Za-z]{2,5}[0-9]{5,15})\b/i', $remaining, $sm3)) {
+                $serial = strtoupper($sm3[1]);
+                $remaining = str_ireplace($serial, ' ', $remaining);
+            }
+        }
+
+        if (empty($pin) && preg_match('/\b([0-9]{10,14})\b/', $remaining, $pm2)) {
+            $pin = $pm2[1];
+            $remaining = str_replace($pin, ' ', $remaining);
+        }
+
+        if (empty($serial) && preg_match('/\b([0-9]{10,14})\b/', $remaining, $sm4)) {
+            $serial = $sm4[1];
+        }
+
+        return [
+            'isComplete'  => (!empty($indexNumber) && !empty($year) && !empty($serial) && !empty($pin)),
+            'indexNumber' => $indexNumber,
+            'year'        => $year,
+            'serial'      => $serial,
+            'pin'         => $pin,
+            'examType'    => $examType
+        ];
+    }
+
+    /**
      * Parse Card Serial Number and PIN from any free-form pasted format
      * 
      * Handles:
@@ -420,9 +508,9 @@ class WhatsAppBot {
         $pin = '';
 
         // 1. Explicit keyword matching (e.g. Serial: WSC12345678 / PIN: 123456789012)
-        if (preg_match('/(?:serial|sn|s\/n|serial\s*no|card\s*serial)(?:\s+number)?(?:\s+is)?[:\s=]*([a-zA-Z0-9_\-]{5,30})/i', $input, $m)) {
+        if (preg_match('/(?:card\s*serial|voucher\s*serial|serial\s*(?:number|num|no)?|s\/n|sn)[:\s=]*([a-zA-Z0-9_\-]{5,30})/i', $input, $m)) {
             $cand = strtoupper(trim($m[1]));
-            if (preg_match('/[A-Z]/', $cand) && preg_match('/\d/', $cand)) {
+            if ($cand !== 'NUMBER' && $cand !== 'NO') {
                 $serial = $cand;
             }
         }
@@ -530,7 +618,40 @@ class WhatsAppBot {
         $cleanText = trim($text);
         $lower = strtolower($cleanText);
 
-        // 1. Check if user already has an active WAEC checking session
+        // 1. Check universal all-in-one credentials in ANY order or formatting first:
+        $allInOne = self::extractWaecCredentialsFromText($cleanText);
+        if ($allInOne && $allInOne['isComplete']) {
+            self::clearUserSession($phone, $pdo);
+            $res = WaecResultChecker::checkResult(
+                $allInOne['examType'],
+                $allInOne['indexNumber'],
+                $allInOne['year'],
+                $allInOne['serial'],
+                $allInOne['pin']
+            );
+            if (!empty($res['image_file']) || !empty($res['image_path'])) {
+                $GLOBALS['waec_latest_image'] = $res['image_file'] ?? $res['image_path'];
+            }
+            if (!empty($res['reply'])) {
+                return $res['reply'];
+            }
+            if ($res['success']) {
+                return WaecResultChecker::formatResultSlip($res);
+            } else {
+                $msg = $res['message'] ?? $res['error_message'] ?? 'Official notice from WAEC';
+                return "❌ *WAEC Result Retrieval Notice*:\n\n" . $msg . "\n\n"
+                    . "━━━━━━━━━━━━━━━━━━━━━\n"
+                    . "📋 *Checked Details*:\n"
+                    . "• Exam: {$allInOne['examType']} {$allInOne['year']}\n"
+                    . "• Index: `{$allInOne['indexNumber']}`\n"
+                    . "• Serial: `{$allInOne['serial']}`\n"
+                    . "━━━━━━━━━━━━━━━━━━━━━\n\n"
+                    . "💳 Need a new result checker card? Buy at https://apexprime.club/digital_store\n"
+                    . "Or reply *result checker* to check step-by-step.";
+            }
+        }
+
+        // 2. Check if user already has an active WAEC checking session
         $session = self::getUserSession($phone, $pdo);
         if ($session && strpos($session['step'] ?? '', 'waec_') === 0) {
             // Check cancellation keywords
@@ -542,7 +663,7 @@ class WhatsAppBot {
             return self::processWaecSessionStep($session['step'], $cleanText, $session['data'] ?? [], $phone, $profileName, $pdo);
         }
 
-        // 2. Check 1-line direct check command format:
+        // 3. Check 1-line direct check command format:
         // e.g. "check wassce 0010101001 2024 WSC12345678 123456789012" or any order of pin & serial
         if (preg_match('/^(?:check\s+|waec\s+)?(wassce|bece)\s+(\d{10})\s+(\d{4})(.*)$/is', $cleanText, $directMatch)) {
             $examType  = strtoupper($directMatch[1]);

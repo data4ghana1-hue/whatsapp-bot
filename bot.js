@@ -1056,13 +1056,44 @@ async function handleCustomerInteractiveSession(phone, text, name) {
             let serial = session.data.serial || '';
             let pin = session.data.pin || '';
 
-            // Extract Serial
-            const serialMatch = raw.match(/\b((?:WSC|BCE)[a-zA-Z0-9_\-]{5,20})\b/i) || raw.match(/\b([A-Za-z]{2,5}[0-9]{5,15})\b/i);
-            if (serialMatch && !serial) serial = serialMatch[1].toUpperCase();
+            // 1. Explicit Serial matching (e.g. "Serial Number: WGR250609784", "Serial: WSC12345678")
+            const serialExplicit = raw.match(/(?:card\s*serial|voucher\s*serial|serial\s*(?:number|num|no)?|s\/n|sn)[:\s=]*([a-zA-Z0-9_\-]{6,30})/i);
+            if (serialExplicit && !serial) {
+                const sCand = serialExplicit[1].toUpperCase().trim();
+                if (sCand !== 'NUMBER' && sCand !== 'NO') serial = sCand;
+            }
 
-            // Extract PIN (10 to 14 digits)
-            const pinMatch = raw.match(/\b(\d{10,14})\b/);
-            if (pinMatch && !pin) pin = pinMatch[1];
+            // 2. Explicit PIN matching (e.g. "PIN: 686064817245", "PIN = ...")
+            const pinExplicit = raw.match(/(?:pin|card\s*pin|code|pin\s*code|voucher\s*pin)[:\s=]*([0-9]{10,14})/i);
+            if (pinExplicit && !pin) pin = pinExplicit[1];
+
+            // 3. Fallback regex for serial (e.g. WSC..., WGR..., BCE..., WAEC...)
+            if (!serial) {
+                const serialMatch = raw.match(/\b((?:WSC|WGR|BCE|WAEC)[a-zA-Z0-9_\-]{5,20})\b/i) || raw.match(/\b([A-Za-z]{2,5}[0-9]{5,15})\b/i);
+                if (serialMatch) serial = serialMatch[1].toUpperCase();
+            }
+
+            // 4. Fallback regex for PIN (10 to 14 digits)
+            if (!pin) {
+                const digitsMatches = raw.match(/\b(\d{10,14})\b/g) || [];
+                for (const d of digitsMatches) {
+                    if (d !== serial && d !== session.data.index_number) {
+                        pin = d;
+                        break;
+                    }
+                }
+            }
+
+            // 5. If serial is still empty and there are multiple 10-14 digit numbers (e.g. BECE numeric serial)
+            if (!serial) {
+                const digitsMatches = raw.match(/\b(\d{10,14})\b/g) || [];
+                for (const d of digitsMatches) {
+                    if (d !== pin && d !== session.data.index_number) {
+                        serial = d;
+                        break;
+                    }
+                }
+            }
 
             if (!serial && !pin) {
                 const alphanumeric = raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -1282,11 +1313,169 @@ async function handleCustomerInteractiveSession(phone, text, name) {
 }
 
 /**
+ * Universal extractor for WAEC / BECE credentials from any text message in any order or formatting
+ */
+function extractWaecCredentials(text) {
+    if (!text || typeof text !== 'string') return null;
+    const raw = text.trim();
+
+    // 1. Detect Exam Type
+    let examType = 'W.A.S.S.C.E. (School)';
+    let typeCode = '01';
+    const isBece = /\b(bece|b\.e\.c\.e)\b/i.test(raw);
+    const isPrivate = /\b(private|novdec|nov-dec|nov\/dec|pwas|pbec)\b/i.test(raw);
+
+    if (isBece) {
+        examType = isPrivate ? 'B.E.C.E. (Private)' : 'B.E.C.E.';
+        typeCode = isPrivate ? '09' : '07';
+    } else {
+        examType = isPrivate ? 'W.A.S.S.C.E. (Private)' : 'W.A.S.S.C.E. (School)';
+        typeCode = isPrivate ? '08' : '01';
+    }
+
+    // 2. Extract PIN (explicit "pin:" or labelled, or isolated 10-14 digit number)
+    let pin = '';
+    const pinExplicit = raw.match(/(?:pin|card\s*pin|code|pin\s*code|voucher\s*pin)[:\s=]*([0-9]{10,14})/i);
+    if (pinExplicit) {
+        pin = pinExplicit[1];
+    }
+
+    // 3. Extract Serial (explicit "serial number:" or "serial:", e.g. "Serial Number: WGR250609784")
+    let serial = '';
+    const serialExplicit = raw.match(/(?:card\s*serial|voucher\s*serial|serial\s*(?:number|num|no)?|s\/n|sn)[:\s=]*([a-zA-Z0-9_\-]{6,30})/i);
+    if (serialExplicit) {
+        const sCand = serialExplicit[1].toUpperCase().trim();
+        if (sCand !== 'NUMBER' && sCand !== 'NO') serial = sCand;
+    }
+
+    // 4. Extract Year (explicit "year:" or labelled, or isolated 1990-2030)
+    let year = '';
+    const yearExplicit = raw.match(/(?:year|exam\s*year|session|examyear|year\s*is)[:\s=]*([12]\d{3})/i);
+    if (yearExplicit) {
+        year = yearExplicit[1];
+    }
+
+    // 5. Extract Index Number (explicit "index:" or 10-digit number)
+    let indexNumber = '';
+    const indexExplicit = raw.match(/(?:index|index\s*no|index\s*number|candid|candidate)[:\s=]*([0-9]{10})/i);
+    if (indexExplicit) {
+        indexNumber = indexExplicit[1];
+    }
+
+    // 6. Token search for remaining fields if not found by labels
+    let remaining = raw;
+    if (pin) remaining = remaining.replace(pin, ' ');
+    if (serial) remaining = remaining.replace(new RegExp(serial, 'i'), ' ');
+    if (year) remaining = remaining.replace(year, ' ');
+    if (indexNumber) remaining = remaining.replace(indexNumber, ' ');
+
+    // If Index Number not yet found, find first 10-digit number
+    if (!indexNumber) {
+        const idxMatch = remaining.match(/\b([0-9]{10})\b/);
+        if (idxMatch) {
+            indexNumber = idxMatch[1];
+            remaining = remaining.replace(indexNumber, ' ');
+        }
+    }
+
+    // If Year not yet found, find 4-digit year (1995 to 2030)
+    if (!year) {
+        const yrMatch = remaining.match(/\b(199[5-9]|20[0-3]\d)\b/);
+        if (yrMatch) {
+            year = yrMatch[1];
+            remaining = remaining.replace(year, ' ');
+        }
+    }
+
+    // If Serial not yet found, look for typical WAEC serial formats (e.g. WSC12345678, WGR250609784, BCE...)
+    if (!serial) {
+        const sMatch = remaining.match(/\b((?:WSC|WGR|BCE|WAEC)[A-Za-z0-9_\-]{5,20})\b/i) ||
+                       remaining.match(/\b([A-Za-z]{2,5}[0-9]{5,15})\b/i);
+        if (sMatch) {
+            serial = sMatch[1].toUpperCase();
+            remaining = remaining.replace(new RegExp(serial, 'i'), ' ');
+        }
+    }
+
+    // If PIN not yet found, look for 10-14 digits
+    if (!pin) {
+        const pMatch = remaining.match(/\b([0-9]{10,14})\b/);
+        if (pMatch) {
+            pin = pMatch[1];
+            remaining = remaining.replace(pin, ' ');
+        }
+    }
+
+    // If Serial still not found and there's a 10-14 digit number remaining (BECE numeric serial)
+    if (!serial) {
+        const sNumMatch = remaining.match(/\b([0-9]{10,14})\b/);
+        if (sNumMatch) {
+            serial = sNumMatch[1];
+        }
+    }
+
+    return {
+        isComplete: Boolean(indexNumber && year && serial && pin),
+        indexNumber,
+        year,
+        serial,
+        pin,
+        examType,
+        typeCode
+    };
+}
+
+/**
  * Call full interactive session engine connected to Apex Prime live database,
- * prioritizing the local PHP CLI bridge with MySQL connection, and falling back
+ * prioritizing active in-memory sessions and all-in-one WAEC requests,
+ * then the local PHP CLI bridge with MySQL connection, and falling back
  * to the Node.js interactive session engine.
  */
 async function processMessageViaBridge(phone, text, name) {
+    // 0. Active Customer Interactive Session Priority:
+    // If the customer has an active multi-step session (e.g. currently at Step 4 of WAEC checker),
+    // process their answer via Node.js session engine FIRST before PHP CLI overrides it!
+    if (customerSessions.has(phone)) {
+        try {
+            const interactiveReply = await handleCustomerInteractiveSession(phone, text, name);
+            if (interactiveReply) {
+                if (typeof interactiveReply === 'object') {
+                    return { handled: true, ...interactiveReply };
+                }
+                return { handled: true, reply: interactiveReply };
+            }
+        } catch (e) {
+            console.error('[Active Interactive Session Error]:', e.message);
+        }
+    }
+
+    // 0.5. Universal All-In-One WAEC Credentials Detection:
+    // If the user pasted all credentials together in a single message (in ANY order or format),
+    // immediately check the result live online and deliver the screenshot!
+    const waecCreds = extractWaecCredentials(text);
+    if (waecCreds && waecCreds.isComplete) {
+        try {
+            customerSessions.delete(phone);
+            console.log(`[WAEC Instant Check] Found complete credentials for ${waecCreds.indexNumber} (${waecCreds.examType} ${waecCreds.year})`);
+            const waecRes = await checkWaecOnline(
+                waecCreds.examType,
+                waecCreds.typeCode,
+                waecCreds.indexNumber,
+                waecCreds.year,
+                waecCreds.serial,
+                waecCreds.pin
+            );
+            if (waecRes) {
+                if (typeof waecRes === 'object') {
+                    return { handled: true, ...waecRes };
+                }
+                return { handled: true, reply: waecRes };
+            }
+        } catch (waecErr) {
+            console.error('[All-in-one WAEC Error]:', waecErr.message);
+        }
+    }
+
     // 1. Prioritize PHP CLI bridge (executes full WhatsAppBot.php connected to database)
     if (fs.existsSync(BRIDGE_SCRIPT)) {
         try {
