@@ -1171,6 +1171,12 @@ async function requestPairingCode(isRefresh = false) {
         btn.innerHTML = `<i class="fab fa-whatsapp" style="font-size: 1.2rem;"></i> Generate Linking Code (GHS 2.00)`;
 
         if (!data.success) {
+            if (data.wallet_balance !== undefined) {
+                const balEl = document.getElementById('displayWalletBal');
+                if (balEl) {
+                    balEl.innerText = `GHS ${parseFloat(data.wallet_balance).toFixed(2)}`;
+                }
+            }
             if (data.code === 'INSUFFICIENT_BALANCE') {
                 Swal.fire({
                     title: 'WhatsApp Bot',

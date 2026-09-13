@@ -236,6 +236,17 @@ if ($action === 'bot_query' || $action === 'bot_lookup_user') {
             }
         }
 
+        $refundRestriction = function_exists('getPhoneRefundRestriction') ? getPhoneRefundRestriction($pdo, $recipient) : null;
+        if ($refundRestriction) {
+            jsonResponse(false, $refundRestriction['message'], [
+                'code'            => 'REFUND_RESTRICTED',
+                'phone'           => $recipient,
+                'cooldown_until'  => $refundRestriction['unlock_time'],
+                'remaining_days'  => $refundRestriction['remaining_days'],
+                'remaining_secs'  => $refundRestriction['remaining_seconds']
+            ], 422);
+        }
+
         $currentBal = (float)$userRow['wallet_balance'];
         if ($currentBal < $cost) {
             jsonResponse(false, 'Insufficient wallet balance', ['balance' => $currentBal, 'needed' => $cost, 'role' => $userRole], 400);
@@ -556,6 +567,17 @@ if ($action === 'send_bundle' || $action === 'send_order' || $action === 'send_i
         jsonResponse(false, "Invalid phone number format or prefix for network: {$network}.");
     }
 
+    $refundRestriction = function_exists('getPhoneRefundRestriction') ? getPhoneRefundRestriction($pdo, $validatedPhone) : null;
+    if ($refundRestriction) {
+        jsonResponse(false, $refundRestriction['message'], [
+            'code'            => 'REFUND_RESTRICTED',
+            'phone'           => $validatedPhone,
+            'cooldown_until'  => $refundRestriction['unlock_time'],
+            'remaining_days'  => $refundRestriction['remaining_days'],
+            'remaining_secs'  => $refundRestriction['remaining_seconds']
+        ], 422);
+    }
+
     // Validate if MTN number is registered
     $force = filter_var($requestData['force'] ?? $_POST['force'] ?? $_GET['force'] ?? false, FILTER_VALIDATE_BOOLEAN);
     if (!$force && stripos($network, 'MTN') !== false && stripos($network, 'Group') === false) {
@@ -752,7 +774,7 @@ if ($action === 'send_bundle' || $action === 'send_order' || $action === 'send_i
                         $orderStatus = 'failed';
                         $message = $errReason;
 
-                        $stmtUpdate = $pdo->prepare("UPDATE bundle_sends SET status = ?, message = ?, refund_transferred = 1 WHERE id = ?");
+                        $stmtUpdate = $pdo->prepare("UPDATE bundle_sends SET status = ?, message = ?, refund_transferred = 1, refunded_at = NOW(), updated_at = NOW() WHERE id = ?");
                         $stmtUpdate->execute([$orderStatus, $message, $orderId]);
 
                         if (!$isSandbox) {
@@ -1301,6 +1323,17 @@ if ($action === 'send_bundle' || $action === 'send_order' || $action === 'send_i
         $validatedPhone = normalizeAndValidatePhone($recipient, $network);
         if (!$validatedPhone) {
             jsonResponse(false, "Invalid phone number format or prefix for network: {$network}.");
+        }
+
+        $refundRestriction = function_exists('getPhoneRefundRestriction') ? getPhoneRefundRestriction($pdo, $validatedPhone) : null;
+        if ($refundRestriction) {
+            jsonResponse(false, $refundRestriction['message'], [
+                'code'            => 'REFUND_RESTRICTED',
+                'phone'           => $validatedPhone,
+                'cooldown_until'  => $refundRestriction['unlock_time'],
+                'remaining_days'  => $refundRestriction['remaining_days'],
+                'remaining_secs'  => $refundRestriction['remaining_seconds']
+            ], 422);
         }
         
         if (!$freeMode && $cost > $walletBalance) {

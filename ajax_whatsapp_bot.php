@@ -75,6 +75,90 @@ function normalizeBotPhone(string $raw): string {
     return $digits;
 }
 
+// Helper: locate Node.js binary across cPanel CloudLinux, VPS, and standard environments
+function findNodeBinary(): string {
+    if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
+        return 'node';
+    }
+
+    $candidates = [
+        '/opt/alt/alt-nodejs22/root/usr/bin/node',
+        '/opt/alt/alt-nodejs20/root/usr/bin/node',
+        '/opt/alt/alt-nodejs18/root/usr/bin/node',
+        '/opt/alt/alt-nodejs16/root/usr/bin/node',
+        '/usr/local/bin/node',
+        '/usr/bin/node',
+        'node'
+    ];
+
+    $which = @trim(shell_exec('which node 2>/dev/null') ?: '');
+    if ($which && @is_executable($which)) {
+        return $which;
+    }
+
+    foreach ($candidates as $bin) {
+        if (@is_executable($bin)) {
+            return $bin;
+        }
+    }
+
+    return '/opt/alt/alt-nodejs18/root/usr/bin/node';
+}
+
+// Helper: check if bot process is currently running on the server
+function isBotProcessRunning(): bool {
+    // 1. Fast HTTP API status check
+    $ch = curl_init('http://127.0.0.1:3000/api/status');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => 1,
+        CURLOPT_CONNECTTIMEOUT => 1
+    ]);
+    $res = curl_exec($ch);
+    curl_close($ch);
+    if ($res && json_decode($res, true)) {
+        return true;
+    }
+
+    // 2. Process list check on Linux
+    if (strtoupper(substr(PHP_OS, 0, 3)) !== 'WIN') {
+        $pgrep = @shell_exec("pgrep -f '[b]ot.js' 2>/dev/null");
+        if (!empty(trim($pgrep ?: ''))) {
+            return true;
+        }
+        $ps = @shell_exec("ps aux 2>/dev/null | grep '[b]ot.js'");
+        if (!empty(trim($ps ?: ''))) {
+            return true;
+        }
+    } else {
+        $tasks = @shell_exec("tasklist /FI \"IMAGENAME eq node.exe\" 2>NUL");
+        if ($tasks && stripos($tasks, 'node.exe') !== false) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// Helper: start Node bot in background with proper binary and environment
+function startBotProcess(string $botDir): void {
+    if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
+        $winCmd = 'cmd /c "cd /d ' . escapeshellarg($botDir) . ' && start \"\" /b node bot.js > bot.log 2>&1"';
+        @pclose(@popen($winCmd, "r"));
+    } else {
+        $nodeBin = findNodeBinary();
+        $logFile = $botDir . '/bot.log';
+        $cmd = sprintf(
+            "cd %s && nohup %s bot.js > %s 2>&1 < /dev/null &",
+            escapeshellarg($botDir),
+            escapeshellarg($nodeBin),
+            escapeshellarg($logFile)
+        );
+        @exec($cmd);
+    }
+}
+
+
 // ─────────────────────────────────────────────────────────────
 // 1. ACTION: Check Current Status
 // ─────────────────────────────────────────────────────────────
@@ -235,104 +319,75 @@ if ($action === 'request_pairing') {
 
     // 4. Request pairing code from Node.js Bot Service
     $pairingCode = null;
+    $pairingError = null;
     $postPayload = json_encode(['phone' => $cleanPhone]);
 
-    // Check if Node bot is active on port 3000
-    $botHealthy = false;
-    $chCheck = curl_init('http://127.0.0.1:3000/api/status');
-    curl_setopt_array($chCheck, [
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT        => 2,
-        CURLOPT_CONNECTTIMEOUT => 1
-    ]);
-    $statusRes = curl_exec($chCheck);
-    curl_close($chCheck);
-    if ($statusRes && ($statusData = json_decode($statusRes, true))) {
-        $botHealthy = true;
-    } else {
-        // Auto-start Node bot if stopped
-        if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
-            $winCmd = 'cmd /c "cd /d ' . escapeshellarg($botDir) . ' && start \"\" /b node bot.js > bot.log 2>&1"';
-            @pclose(@popen($winCmd, "r"));
-        } else {
-            $nixCmd = 'cd ' . escapeshellarg($botDir) . ' && nohup node bot.js > bot.log 2>&1 &';
-            @exec($nixCmd);
-        }
-        // Poll for up to 5 seconds for bot to spin up
-        for ($s = 0; $s < 10; $s++) {
+    // A. Prepare the file bridge immediately so any running or launching bot picks it up
+    @unlink($pairingStateFile);
+    @file_put_contents($pairingReqFile, json_encode([
+        'phone'             => $cleanPhone,
+        'linked_via'        => 'phone_number',
+        'personal_bot_mode' => true,
+        'user_id'           => $userId,
+        'record_id'         => $botRecordId,
+        'timestamp'         => time()
+    ], JSON_PRETTY_PRINT));
+
+    // B. Ensure Node bot process is actively running on the server
+    if (!isBotProcessRunning()) {
+        startBotProcess($botDir);
+        // Allow up to 3 seconds for process to launch
+        for ($s = 0; $s < 6; $s++) {
             usleep(500000); // 500ms
-            $chCheck = curl_init('http://127.0.0.1:3000/api/status');
-            curl_setopt_array($chCheck, [
-                CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_TIMEOUT        => 1,
-                CURLOPT_CONNECTTIMEOUT => 1
-            ]);
-            $spinRes = curl_exec($chCheck);
-            curl_close($chCheck);
-            if ($spinRes) {
-                $botHealthy = true;
+            if (isBotProcessRunning()) {
                 break;
             }
         }
     }
 
-    // A. Direct HTTP request to Node.js bot server (Priority: local port 3000)
-    $pairingEndpoints = [
-        'http://127.0.0.1:3000/api/request-pairing-code'
-    ];
-    if (!empty($_SERVER['HTTP_HOST']) && strpos($_SERVER['HTTP_HOST'], 'localhost') === false && strpos($_SERVER['HTTP_HOST'], '127.0.0.1') === false) {
-        $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https://' : 'http://';
-        $pairingEndpoints[] = $scheme . $_SERVER['HTTP_HOST'] . '/whatsapp_bot/api/request-pairing-code';
-    }
+    // C. Direct HTTP request to Node.js bot server (Priority: local port 3000)
+    $ch = curl_init('http://127.0.0.1:3000/api/request-pairing-code');
+    curl_setopt_array($ch, [
+        CURLOPT_POST           => true,
+        CURLOPT_POSTFIELDS     => $postPayload,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => 15,
+        CURLOPT_CONNECTTIMEOUT => 2,
+        CURLOPT_HTTPHEADER     => ['Content-Type: application/json']
+    ]);
+    $nodeApiRes = curl_exec($ch);
+    curl_close($ch);
 
-    foreach ($pairingEndpoints as $endpoint) {
-        $ch = curl_init($endpoint);
-        curl_setopt_array($ch, [
-            CURLOPT_POST           => true,
-            CURLOPT_POSTFIELDS     => $postPayload,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT        => 22,
-            CURLOPT_CONNECTTIMEOUT => 3,
-            CURLOPT_SSL_VERIFYPEER => false,
-            CURLOPT_SSL_VERIFYHOST => false,
-            CURLOPT_HTTPHEADER     => ['Content-Type: application/json']
-        ]);
-        $nodeApiRes = curl_exec($ch);
-        curl_close($ch);
-
-        if ($nodeApiRes) {
-            $apiJson = json_decode($nodeApiRes, true);
-            if (!empty($apiJson['pairing_code'])) {
-                $pairingCode = $apiJson['pairing_code'];
-                break;
-            }
+    if ($nodeApiRes) {
+        $apiJson = json_decode($nodeApiRes, true);
+        if (!empty($apiJson['pairing_code'])) {
+            $pairingCode = $apiJson['pairing_code'];
+        } elseif (!empty($apiJson['message']) && ($apiJson['success'] ?? true) === false) {
+            $pairingError = $apiJson['message'];
         }
     }
 
-    // B. File Bridge Fallback (writes pairing request to disk and polls up to 25s)
-    if (!$pairingCode) {
-        @file_put_contents($pairingReqFile, json_encode([
-            'phone'             => $cleanPhone,
-            'linked_via'        => 'phone_number',
-            'personal_bot_mode' => true,
-            'user_id'           => $userId,
-            'record_id'         => $botRecordId,
-            'timestamp'         => time()
-        ], JSON_PRETTY_PRINT));
-
-        for ($w = 0; $w < 50; $w++) {
-            usleep(500000); // 500ms * 50 = 25 seconds
+    // D. File Bridge Fallback (reads pairing_state.json and polls up to 35 seconds)
+    if (!$pairingCode && empty($pairingError)) {
+        for ($w = 0; $w < 70; $w++) { // 70 * 500ms = 35 seconds
+            usleep(500000);
             if (file_exists($pairingStateFile)) {
                 $stData = json_decode(@file_get_contents($pairingStateFile), true);
-                if ($stData && !empty($stData['pairing_code']) && ($stData['phone'] ?? '') === $cleanPhone) {
-                    $pairingCode = $stData['pairing_code'];
-                    break;
+                if ($stData) {
+                    if (!empty($stData['pairing_code']) && ($stData['phone'] ?? '') === $cleanPhone) {
+                        $pairingCode = $stData['pairing_code'];
+                        break;
+                    }
+                    if (isset($stData['success']) && $stData['success'] === false && ($stData['phone'] ?? '') === $cleanPhone) {
+                        $pairingError = $stData['error'] ?? 'WhatsApp pairing was rejected.';
+                        break;
+                    }
                 }
             }
         }
     }
 
-    // C. If still no valid code generated from WhatsApp servers, REFUND user and inform them
+    // E. If still no valid code generated from WhatsApp servers, REFUND user and inform them
     if (!$pairingCode) {
         if (!$existingPending || !$isRefresh) {
             $refundTx = 'REF-' . time() . '-' . mt_rand(1000, 9999);
@@ -351,11 +406,16 @@ if ($action === 'request_pairing') {
             $_SESSION['user']['wallet_balance'] = $refundedBal;
         }
 
+        $userMsg = 'WhatsApp servers took too long to return the linking code. Your GHS 2.00 has been refunded to your wallet. Please tap Generate Linking Code again.';
+        if (!empty($pairingError)) {
+            $userMsg = "WhatsApp engine notice: {$pairingError} Your GHS 2.00 has been refunded to your wallet. Please try again.";
+        }
+
         echo json_encode([
             'success'        => false,
             'code'           => 'PAIRING_TIMEOUT',
             'wallet_balance' => $refundedBal,
-            'message'        => 'WhatsApp servers took too long to return the linking code. Your GHS 2.00 has been refunded to your wallet. Please tap Generate Linking Code again.'
+            'message'        => $userMsg
         ]);
         exit;
     }
