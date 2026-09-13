@@ -406,9 +406,19 @@ if ($action === 'request_pairing') {
             $_SESSION['user']['wallet_balance'] = $refundedBal;
         }
 
+        // Inspect bot.log for any fatal process crash if error is still empty
+        $logFile = $botDir . '/bot.log';
+        if (empty($pairingError) && file_exists($logFile)) {
+            $logLines = @file($logFile) ?: [];
+            $lastLog = trim(implode(' ', array_slice($logLines, -4)));
+            if (!empty($lastLog) && (stripos($lastLog, 'Error') !== false || stripos($lastLog, 'Cannot find') !== false || stripos($lastLog, 'SyntaxError') !== false)) {
+                $pairingError = "Process log: " . substr(strip_tags($lastLog), 0, 160);
+            }
+        }
+
         $userMsg = 'WhatsApp servers took too long to return the linking code. Your GHS 2.00 has been refunded to your wallet. Please tap Generate Linking Code again.';
         if (!empty($pairingError)) {
-            $userMsg = "WhatsApp engine notice: {$pairingError} Your GHS 2.00 has been refunded to your wallet. Please try again.";
+            $userMsg = "WhatsApp engine notice: {$pairingError}. Your GHS 2.00 has been refunded to your wallet. Please try again.";
         }
 
         echo json_encode([
