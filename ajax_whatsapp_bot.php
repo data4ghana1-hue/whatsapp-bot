@@ -143,8 +143,13 @@ function isBotProcessRunning(): bool {
 // Helper: start Node bot in background with proper binary and environment
 function startBotProcess(string $botDir): void {
     if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
-        $winCmd = 'cmd /c "cd /d ' . escapeshellarg($botDir) . ' && start \"\" /b node bot.js > bot.log 2>&1"';
-        @pclose(@popen($winCmd, "r"));
+        // Write a temp batch file to launch bot detached so Windows won't block on log redirection
+        $batFile = $botDir . DIRECTORY_SEPARATOR . 'start_bot_temp.bat';
+        $logOut = $botDir . DIRECTORY_SEPARATOR . 'bot_out.log';
+        $logErr = $botDir . DIRECTORY_SEPARATOR . 'bot_err.log';
+        $batContent = "@echo off\r\ncd /d \"" . $botDir . "\"\r\nstart \"\" /b node bot.js >\"" . $logOut . "\" 2>\"" . $logErr . "\"\r\n";
+        @file_put_contents($batFile, $batContent);
+        @pclose(@popen('cmd /c "' . $batFile . '" >nul 2>&1', 'r'));
     } else {
         $nodeBin = findNodeBinary();
         $logFile = $botDir . '/bot.log';
@@ -247,7 +252,7 @@ if ($action === 'get_status') {
 // 2. ACTION: Request Pairing Code (Debits GHS 2.00)
 // ─────────────────────────────────────────────────────────────
 if ($action === 'request_pairing') {
-    @set_time_limit(90);
+    @set_time_limit(120);
     $rawPhone = trim($_POST['phone'] ?? '');
     $cleanPhone = normalizeBotPhone($rawPhone);
     $isRefresh = !empty($_POST['is_refresh']);
@@ -336,23 +341,26 @@ if ($action === 'request_pairing') {
     // B. Ensure Node bot process is actively running on the server
     if (!isBotProcessRunning()) {
         startBotProcess($botDir);
-        // Allow up to 3 seconds for process to launch
-        for ($s = 0; $s < 6; $s++) {
+        // Allow up to 8 seconds for process to launch and bind port 3000
+        for ($s = 0; $s < 16; $s++) {
             usleep(500000); // 500ms
             if (isBotProcessRunning()) {
+                // Give it an extra 1.5s to be fully ready after port bind
+                usleep(1500000);
                 break;
             }
         }
     }
 
     // C. Direct HTTP request to Node.js bot server (Priority: local port 3000)
+    // Timeout is 45s — bot needs up to ~30s to start fresh and get a pairing code from WhatsApp
     $ch = curl_init('http://127.0.0.1:3000/api/request-pairing-code');
     curl_setopt_array($ch, [
         CURLOPT_POST           => true,
         CURLOPT_POSTFIELDS     => $postPayload,
         CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT        => 15,
-        CURLOPT_CONNECTTIMEOUT => 2,
+        CURLOPT_TIMEOUT        => 45,
+        CURLOPT_CONNECTTIMEOUT => 4,
         CURLOPT_HTTPHEADER     => ['Content-Type: application/json']
     ]);
     $nodeApiRes = curl_exec($ch);
@@ -367,9 +375,9 @@ if ($action === 'request_pairing') {
         }
     }
 
-    // D. File Bridge Fallback (reads pairing_state.json and polls up to 35 seconds)
+    // D. File Bridge Fallback (reads pairing_state.json and polls up to 50 seconds)
     if (!$pairingCode && empty($pairingError)) {
-        for ($w = 0; $w < 70; $w++) { // 70 * 500ms = 35 seconds
+        for ($w = 0; $w < 100; $w++) { // 100 * 500ms = 50 seconds
             usleep(500000);
             if (file_exists($pairingStateFile)) {
                 $stData = json_decode(@file_get_contents($pairingStateFile), true);

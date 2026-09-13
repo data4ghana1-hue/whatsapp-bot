@@ -1145,7 +1145,14 @@ async function requestPairingCode(isRefresh = false) {
 
     const btn = document.getElementById('btnRequestPairing');
     btn.disabled = true;
-    btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Contacting WhatsApp Engine...`;
+    btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Starting WhatsApp Engine...`;
+
+    // Update button text after 8 seconds if still waiting
+    const statusMsgTimer = setTimeout(() => {
+        if (btn.disabled) {
+            btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Contacting WhatsApp Servers...`;
+        }
+    }, 8000);
 
     try {
         const formData = new FormData();
@@ -1167,6 +1174,7 @@ async function requestPairingCode(isRefresh = false) {
             throw new Error('Unable to connect to WhatsApp engine. Please try again.');
         }
 
+        clearTimeout(statusMsgTimer);
         btn.disabled = false;
         btn.innerHTML = `<i class="fab fa-whatsapp" style="font-size: 1.2rem;"></i> Generate Linking Code (GHS 2.00)`;
 
@@ -1248,6 +1256,7 @@ async function requestPairingCode(isRefresh = false) {
         startStatusPolling();
 
     } catch (err) {
+        clearTimeout(statusMsgTimer);
         btn.disabled = false;
         btn.innerHTML = `<i class="fab fa-whatsapp" style="font-size: 1.2rem;"></i> Generate Linking Code (GHS 2.00)`;
         Swal.fire({
