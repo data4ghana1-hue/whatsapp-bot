@@ -26,6 +26,12 @@ try {
     }
 }
 
+let convertImageToResultPdf = null;
+try {
+    const pdfMod = require('./pdf_converter.js');
+    convertImageToResultPdf = pdfMod.convertImageToResultPdf;
+} catch (e) {}
+
 function findChromePath() {
     const candidatePaths = [
         'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
@@ -62,7 +68,7 @@ function getGradePoints(gradeStr) {
 /**
  * Check BECE Results via https://eresults.waecgh.org/
  */
-async function checkBeceEresults(browser, cleanIndex, cleanYear, isPrivate, cleanSerial, cleanPin, screenshotFilePath) {
+async function checkBeceEresults(browser, cleanIndex, cleanYear, isPrivate, cleanSerial, cleanPin, screenshotFilePath, resultsDir) {
     console.log(`[WAEC eResults] Navigating to https://eresults.waecgh.org/ for BECE Index: ${cleanIndex}...`);
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 1000 });
@@ -73,30 +79,20 @@ async function checkBeceEresults(browser, cleanIndex, cleanYear, isPrivate, clea
 
     await page.goto('https://eresults.waecgh.org/', { waitUntil: 'networkidle2', timeout: 40000 });
 
-    console.log('[WAEC eResults] Filling form fields...');
-    await page.type('#form-indexnum', cleanIndex, { delay: 15 });
-    await page.type('#form-cindexnum', cleanIndex, { delay: 15 });
+    // Fill form
+    await page.waitForSelector('#form-indexnum', { timeout: 15000 });
+    await page.type('#form-indexnum', cleanIndex, { delay: 20 });
+    await page.type('#form-cindexnum', cleanIndex, { delay: 20 });
+
+    // Select Exam Type
     await page.select('#form-examtype', examCode);
-    await page.type('#form-examyear', cleanYear, { delay: 15 });
+
+    // Select Year
+    await page.select('#form-examyear', cleanYear);
 
     // Handle Serial mask
     let rawSerial = cleanSerial.replace(/[^A-Za-z0-9]/g, '');
     await page.type('#form-csn', rawSerial, { delay: 15 });
-
-    const csnVal = await page.evaluate(() => {
-        const el = document.getElementById('form-csn');
-        return el ? el.value.replace(/[^A-Za-z0-9]/g, '') : '';
-    });
-
-    if (csnVal.length < 12) {
-        // If characters were stripped or insufficient, type digits normalized to 12 chars
-        const digits = rawSerial.replace(/\D/g, '');
-        if (digits.length >= 8) {
-            await page.click('#form-csn', { clickCount: 3 });
-            await page.keyboard.press('Backspace');
-            await page.type('#form-csn', digits.padStart(12, '18'), { delay: 15 });
-        }
-    }
 
     // Handle PIN mask
     let rawPin = cleanPin.replace(/[^A-Za-z0-9]/g, '');
@@ -118,6 +114,28 @@ async function checkBeceEresults(browser, cleanIndex, cleanYear, isPrivate, clea
     // Capture screenshot of results or alert modal
     await page.screenshot({ path: screenshotFilePath, fullPage: true });
     console.log(`[WAEC eResults] Saved screenshot to: ${screenshotFilePath}`);
+
+    // PDF generation for the BECE result slip
+    const pdfFileName = `BECE_Result_${cleanIndex}_${cleanYear}.pdf`;
+    const pdfFilePath = resultsDir ? path.resolve(resultsDir, pdfFileName) : null;
+    try {
+        if (pdfFilePath) {
+            await page.pdf({
+                path: pdfFilePath,
+                format: 'A4',
+                printBackground: true,
+                margin: {
+                    top: '10mm',
+                    right: '10mm',
+                    bottom: '10mm',
+                    left: '10mm'
+                }
+            });
+            console.log(`[WAEC eResults] Generated official BECE PDF document: ${pdfFilePath}`);
+        }
+    } catch (pdfErr) {
+        console.warn(`[WAEC eResults] PDF export notice:`, pdfErr.message);
+    }
 
     const extracted = await page.evaluate(() => {
         const swal = document.querySelector('.swal2-modal, .swal2-popup');
@@ -232,6 +250,16 @@ async function checkBeceEresults(browser, cleanIndex, cleanYear, isPrivate, clea
         `━━━━━━━━━━━━━━━━━━━━━\n` +
         `_Powered by Apex Prime Tech (0553381853)_`;
 
+    // Generate high-resolution PDF document from the official result slip screenshot
+    if (convertImageToResultPdf && pdfFilePath) {
+        try {
+            await convertImageToResultPdf(screenshotFilePath, pdfFilePath, candidateName, cleanIndex, cleanYear);
+            console.log(`[WAEC eResults] Formatted official result slip PDF generated: ${pdfFilePath}`);
+        } catch (e) {
+            console.warn(`[WAEC eResults] Error formatting PDF slip:`, e.message);
+        }
+    }
+
     return {
         success: true,
         candidate_name: candidateName,
@@ -242,6 +270,8 @@ async function checkBeceEresults(browser, cleanIndex, cleanYear, isPrivate, clea
         subjects,
         image_path: screenshotFilePath,
         image_file: screenshotFilePath,
+        pdf_file: (pdfFilePath && fs.existsSync(pdfFilePath)) ? pdfFilePath : null,
+        pdf_name: pdfFileName,
         reply: successReply
     };
 }
@@ -249,7 +279,7 @@ async function checkBeceEresults(browser, cleanIndex, cleanYear, isPrivate, clea
 /**
  * Check WASSCE Results via https://ghana.waecdirect.org/
  */
-async function checkWassceDirect(browser, cleanIndex, cleanYear, typeCode, examTypeName, cleanSerial, cleanPin, screenshotFilePath) {
+async function checkWassceDirect(browser, cleanIndex, cleanYear, typeCode, examTypeName, cleanSerial, cleanPin, screenshotFilePath, resultsDir) {
     console.log(`[WAEC Direct] Navigating to https://ghana.waecdirect.org/ for ${cleanIndex}...`);
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 1000 });
@@ -340,6 +370,26 @@ async function checkWassceDirect(browser, cleanIndex, cleanYear, typeCode, examT
         fullPage: true
     });
     console.log(`[WAEC Direct] Saved official screenshot to: ${screenshotFilePath}`);
+
+    // PDF generation for the result slip
+    const pdfFileName = `WAEC_Result_${cleanIndex}_${cleanYear}.pdf`;
+    const pdfFilePath = path.resolve(resultsDir, pdfFileName);
+    try {
+        await activePage.pdf({
+            path: pdfFilePath,
+            format: 'A4',
+            printBackground: true,
+            margin: {
+                top: '10mm',
+                right: '10mm',
+                bottom: '10mm',
+                left: '10mm'
+            }
+        });
+        console.log(`[WAEC Direct] Generated official PDF document: ${pdfFilePath}`);
+    } catch (pdfErr) {
+        console.warn(`[WAEC Direct] PDF export notice (fallback to screenshot):`, pdfErr.message);
+    }
 
     const bodyText = extracted.body;
 
@@ -500,18 +550,30 @@ async function checkWassceDirect(browser, cleanIndex, cleanYear, typeCode, examT
         `━━━━━━━━━━━━━━━━━━━━━\n` +
         `_Powered by Apex Prime Tech (0553381853)_`;
 
-    return {
-        success: true,
-        candidate_name: candidateName,
-        index_number: cleanIndex,
-        exam_type: examTypeName,
-        exam_year: cleanYear,
-        school_name: schoolName,
-        subjects,
-        image_path: screenshotFilePath,
-        image_file: screenshotFilePath,
-        reply: successReply
-    };
+        // Generate high-resolution PDF document from the official result slip screenshot
+        if (convertImageToResultPdf) {
+            try {
+                await convertImageToResultPdf(screenshotFilePath, pdfFilePath, candidateName, cleanIndex, cleanYear);
+                console.log(`[WAEC Direct] Formatted official result slip PDF generated: ${pdfFilePath}`);
+            } catch (e) {
+                console.warn(`[WAEC Direct] Error formatting PDF slip:`, e.message);
+            }
+        }
+
+        return {
+            success: true,
+            candidate_name: candidateName,
+            index_number: cleanIndex,
+            exam_type: examTypeName,
+            exam_year: cleanYear,
+            school_name: schoolName,
+            subjects,
+            image_path: screenshotFilePath,
+            image_file: screenshotFilePath,
+            pdf_file: fs.existsSync(pdfFilePath) ? pdfFilePath : null,
+            pdf_name: pdfFileName,
+            reply: successReply
+        };
 }
 
 /**
@@ -582,10 +644,10 @@ async function checkWaecWithPuppeteer(examTypeInput, typeCodeInput, indexNumber,
         let result;
         if (isBece) {
             // Check BECE on https://eresults.waecgh.org/
-            result = await checkBeceEresults(browser, cleanIndex, cleanYear, isPrivate, cleanSerial, cleanPin, screenshotFilePath);
+            result = await checkBeceEresults(browser, cleanIndex, cleanYear, isPrivate, cleanSerial, cleanPin, screenshotFilePath, resultsDir);
         } else {
             // Check WASSCE on https://ghana.waecdirect.org/
-            result = await checkWassceDirect(browser, cleanIndex, cleanYear, typeCode, examTypeName, cleanSerial, cleanPin, screenshotFilePath);
+            result = await checkWassceDirect(browser, cleanIndex, cleanYear, typeCode, examTypeName, cleanSerial, cleanPin, screenshotFilePath, resultsDir);
         }
 
         await browser.close();
