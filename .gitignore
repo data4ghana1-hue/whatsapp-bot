@@ -1,0 +1,9 @@
+node_modules/
+auth_info_baileys/
+qr.png
+*.log
+.DS_Store
+pairing_state.json
+pairing_request.json
+session_info.json
+contacts.vcf

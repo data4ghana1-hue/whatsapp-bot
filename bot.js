@@ -462,8 +462,18 @@ async function generatePairingCode(phoneNumber) {
 
     // Clear stale credentials — a FRESH session is REQUIRED for pairing
     try {
-        fs.rmSync(AUTH_DIR, { recursive: true, force: true });
-        fs.mkdirSync(AUTH_DIR, { recursive: true });
+        if (fs.existsSync(AUTH_DIR)) {
+            const files = fs.readdirSync(AUTH_DIR);
+            for (const f of files) {
+                try { fs.unlinkSync(path.join(AUTH_DIR, f)); } catch (e) {}
+            }
+            try { fs.rmdirSync(AUTH_DIR); } catch (e) {}
+        }
+    } catch (e) {}
+    try {
+        if (!fs.existsSync(AUTH_DIR)) {
+            fs.mkdirSync(AUTH_DIR, { recursive: true });
+        }
     } catch (e) {}
 
     // Clear previous pairing state files
@@ -478,20 +488,37 @@ async function generatePairingCode(phoneNumber) {
         pendingPairingReject = reject;
     });
 
-    // Set a 30-second timeout for the whole process
+    // Set a 35-second timeout for the whole process
     const timeoutHandle = setTimeout(() => {
         if (pendingPairingReject) {
-            pendingPairingReject(new Error('Timeout waiting for WhatsApp pairing code. Please try again.'));
+            const timeoutErr = new Error('Timeout waiting for WhatsApp pairing code. Please try again.');
+            try {
+                fs.writeFileSync(PAIRING_STATE_FILE, JSON.stringify({
+                    success: false,
+                    error: timeoutErr.message,
+                    phone: cleanPhone,
+                    timestamp: Date.now()
+                }, null, 2));
+            } catch (e) {}
+            pendingPairingReject(timeoutErr);
             pendingPairingPhone = null;
             pendingPairingResolve = null;
             pendingPairingReject = null;
         }
-    }, 30000);
+    }, 35000);
 
     // Start a fresh bot session — connection.update handler will pick up pendingPairingPhone
     console.log(`[Pairing Code] Starting fresh WhatsApp socket for +${cleanPhone}...`);
     startBot().catch(e => {
         clearTimeout(timeoutHandle);
+        try {
+            fs.writeFileSync(PAIRING_STATE_FILE, JSON.stringify({
+                success: false,
+                error: e?.message || String(e),
+                phone: cleanPhone,
+                timestamp: Date.now()
+            }, null, 2));
+        } catch (err) {}
         if (pendingPairingReject) {
             pendingPairingReject(e);
             pendingPairingPhone = null;
@@ -506,6 +533,14 @@ async function generatePairingCode(phoneNumber) {
         return formattedCode;
     } catch (err) {
         clearTimeout(timeoutHandle);
+        try {
+            fs.writeFileSync(PAIRING_STATE_FILE, JSON.stringify({
+                success: false,
+                error: err?.message || String(err),
+                phone: cleanPhone,
+                timestamp: Date.now()
+            }, null, 2));
+        } catch (e) {}
         throw err;
     }
 }
@@ -526,13 +561,21 @@ function watchPairingRequests() {
                     console.log(`[File Bridge] Found pairing request for +${reqData.phone}`);
                     generatePairingCode(reqData.phone).catch(err => {
                         console.error('[File Bridge Pairing Error]:', err.message);
+                        try {
+                            fs.writeFileSync(PAIRING_STATE_FILE, JSON.stringify({
+                                success: false,
+                                error: err?.message || String(err),
+                                phone: reqData.phone,
+                                timestamp: Date.now()
+                            }, null, 2));
+                        } catch (e) {}
                     });
                 }
             }
         }
     } catch (e) {}
 }
-setInterval(watchPairingRequests, 1500);
+setInterval(watchPairingRequests, 1000);
 
 /**
  * Query website backend database API (https://apexprime.club/api.php)
@@ -3003,6 +3046,57 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
+    // POST /api/send-message (Send outbound WhatsApp message)
+    if ((urlPath.endsWith('/api/send-message') || urlPath.endsWith('/send-message')) && req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => body += chunk);
+        req.on('end', async () => {
+            try {
+                if (!currentBaileysSocket || botStatus !== 'connected') {
+                    res.writeHead(503, { 'Content-Type': 'application/json' });
+                    return res.end(JSON.stringify({ success: false, message: 'WhatsApp bot is not connected' }));
+                }
+                const parsed = JSON.parse(body || '{}');
+                let phone = String(parsed.phone || parsed.to || parsed.recipient || '').trim();
+                const message = parsed.message || parsed.text || '';
+
+                if (!phone || !message) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    return res.end(JSON.stringify({ success: false, message: 'Phone and message are required' }));
+                }
+
+                // Format to standard phone string (e.g. 0241234567 -> 233241234567)
+                phone = phone.replace(/[^0-9]/g, '');
+                if (phone.startsWith('0') && phone.length === 10) {
+                    phone = '233' + phone.substring(1);
+                }
+                const jid = phone + '@s.whatsapp.net';
+
+                const result = await currentBaileysSocket.sendMessage(jid, { text: message });
+                const respBody = JSON.stringify({
+                    success: true,
+                    messageId: result?.key?.id,
+                    recipient: phone
+                });
+                res.writeHead(200, {
+                    'Content-Type': 'application/json',
+                    'Content-Length': Buffer.byteLength(respBody),
+                    'Connection': 'close'
+                });
+                return res.end(respBody);
+            } catch (err) {
+                const errBody = JSON.stringify({ success: false, message: err?.message || String(err) });
+                res.writeHead(500, {
+                    'Content-Type': 'application/json',
+                    'Content-Length': Buffer.byteLength(errBody),
+                    'Connection': 'close'
+                });
+                return res.end(errBody);
+            }
+        });
+        return;
+    }
+
     // POST /api/logout (Disconnect current session)
     if ((urlPath.endsWith('/api/logout') || urlPath.endsWith('/api/disconnect')) && req.method === 'POST') {
         try {
@@ -3113,11 +3207,37 @@ const server = http.createServer(async (req, res) => {
     }
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
     console.log(`[Web Server] HTTP Dashboard ready on port ${PORT}`);
 });
 
-// Start bot
-startBot().catch(err => {
-    console.error('[Fatal Error] Failed to start bot:', err);
-});
+// Start bot - process pending pairing request immediately if present
+if (fs.existsSync(PAIRING_REQ_FILE)) {
+    try {
+        const raw = fs.readFileSync(PAIRING_REQ_FILE, 'utf8');
+        const reqData = JSON.parse(raw);
+        if (reqData && reqData.phone) {
+            try { fs.unlinkSync(PAIRING_REQ_FILE); } catch (e) {}
+            console.log(`[Startup] Processing pending pairing request for +${reqData.phone}...`);
+            generatePairingCode(reqData.phone).catch(err => {
+                console.error('[Startup Pairing Error]:', err.message);
+                try {
+                    fs.writeFileSync(PAIRING_STATE_FILE, JSON.stringify({
+                        success: false,
+                        error: err?.message || String(err),
+                        phone: reqData.phone,
+                        timestamp: Date.now()
+                    }, null, 2));
+                } catch (e) {}
+            });
+        } else {
+            startBot().catch(err => console.error('[Fatal Error] Failed to start bot:', err));
+        }
+    } catch (e) {
+        startBot().catch(err => console.error('[Fatal Error] Failed to start bot:', err));
+    }
+} else {
+    startBot().catch(err => {
+        console.error('[Fatal Error] Failed to start bot:', err);
+    });
+}
