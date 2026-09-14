@@ -13,6 +13,19 @@ process.on('unhandledRejection', (reason) => {
     console.error('[Unhandled Rejection]:', reason?.message || reason);
 });
 
+// Polyfill globalThis.crypto and subtle for @whiskeysockets/baileys on Node.js
+try {
+    const nodeCrypto = require('crypto');
+    if (!globalThis.crypto) {
+        globalThis.crypto = nodeCrypto.webcrypto || nodeCrypto;
+    }
+    if (!globalThis.crypto.subtle && nodeCrypto.webcrypto && nodeCrypto.webcrypto.subtle) {
+        globalThis.crypto.subtle = nodeCrypto.webcrypto.subtle;
+    }
+} catch (cryptoErr) {
+    console.warn('[Crypto Polyfill Warning]:', cryptoErr?.message || cryptoErr);
+}
+
 let makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, downloadContentFromMessage, proto, Browsers;
 
 async function loadBaileys() {
