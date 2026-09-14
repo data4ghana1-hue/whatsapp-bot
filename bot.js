@@ -26,7 +26,7 @@ try {
     console.warn('[Crypto Polyfill Warning]:', cryptoErr?.message || cryptoErr);
 }
 
-let makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, downloadContentFromMessage, proto, Browsers;
+let makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, fetchLatestWaWebVersion, downloadContentFromMessage, proto, Browsers;
 
 async function loadBaileys() {
     let baileys;
@@ -43,6 +43,7 @@ async function loadBaileys() {
     useMultiFileAuthState = baileys.useMultiFileAuthState;
     DisconnectReason = baileys.DisconnectReason;
     fetchLatestBaileysVersion = baileys.fetchLatestBaileysVersion;
+    fetchLatestWaWebVersion = baileys.fetchLatestWaWebVersion;
     downloadContentFromMessage = baileys.downloadContentFromMessage;
     proto = baileys.proto;
     Browsers = baileys.Browsers;
@@ -446,6 +447,8 @@ async function generatePairingCode(phoneNumber) {
         cleanPhone = '233' + cleanPhone.substring(1);
     } else if (cleanPhone.length === 9) {
         cleanPhone = '233' + cleanPhone;
+    } else if (cleanPhone.startsWith('2330')) {
+        cleanPhone = '233' + cleanPhone.substring(4);
     }
 
     console.log(`[Pairing Code] Preparing fresh session for +${cleanPhone}...`);
@@ -2405,7 +2408,20 @@ async function startBot() {
     }
 
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
-    const { version, isLatest } = await fetchLatestBaileysVersion();
+    let version = [2, 3000, 1047444420];
+    let isLatest = true;
+    try {
+        const getVer = fetchLatestWaWebVersion || fetchLatestBaileysVersion;
+        if (getVer) {
+            const vInfo = await getVer();
+            if (vInfo && vInfo.version) {
+                version = vInfo.version;
+                isLatest = vInfo.isLatest;
+            }
+        }
+    } catch (verErr) {
+        console.warn('[WhatsApp] Could not fetch live WA Web version, using default:', verErr.message);
+    }
     console.log(`[WhatsApp] Using Baileys version ${version.join('.')} (isLatest: ${isLatest})`);
 
     const sock = makeWASocket({
@@ -2413,7 +2429,7 @@ async function startBot() {
         auth: state,
         logger: pino({ level: 'silent' }),
         printQRInTerminal: false,
-        browser: Browsers ? Browsers.ubuntu('Chrome') : ['Ubuntu', 'Chrome', '22.04.4'],
+        browser: Browsers ? Browsers.macOS('Chrome') : ['Mac OS', 'Chrome', '14.4.1'],
         syncFullHistory: false,
         connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: 60000,
@@ -2423,10 +2439,16 @@ async function startBot() {
     currentBaileysSocket = sock;
 
     // Save session credentials whenever updated
-    sock.ev.on('creds.update', saveCreds);
+    sock.ev.on('creds.update', async () => {
+        try {
+            await saveCreds();
+        } catch (e) {
+            console.error('[Creds Save Error]:', e.message);
+        }
+    });
 
     // Handle connection status updates
-    sock.ev.on('connection.update', (update) => {
+    sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
@@ -2499,11 +2521,11 @@ async function startBot() {
 
             console.log(`[WhatsApp] Connection closed. Status code: ${statusCode}. registered: ${isRegistered}`);
 
-            // Clean up the closed socket completely
+            // Ensure credentials are fully flushed to disk
             try {
-                sock.ev.removeAllListeners();
-                sock.ws?.terminate();
+                await saveCreds();
             } catch (e) {}
+
             if (currentBaileysSocket === sock) {
                 currentBaileysSocket = null;
             }
@@ -2511,7 +2533,8 @@ async function startBot() {
             // Status code 515 = DisconnectReason.restartRequired (standard after pairing handshake)
             const isRestartRequired = (statusCode === DisconnectReason.restartRequired || statusCode === 515);
             const isActualLogout = isRegistered && (statusCode === DisconnectReason.loggedOut) && !isRestartRequired;
-            const isStalePairing = !isRegistered && (statusCode === 401 || statusCode === 405);
+            const isPairingActive = Boolean(activePairingCode || activePairingPhone || (pairingTimestamp && (Date.now() - pairingTimestamp < 180000)));
+            const isStalePairing = !isRegistered && !isPairingActive && (statusCode === 401 || statusCode === 405);
 
             if (isActualLogout || isStalePairing) {
                 console.log('[WhatsApp] Clearing auth directory to allow fresh connection...');
@@ -2531,7 +2554,9 @@ async function startBot() {
                     startBot().catch(e => console.error('[Restart Error]:', e.message));
                 }, 2000);
             } else {
-                const retryDelay = isRestartRequired ? 1500 : (statusCode === 440 ? 5000 : 3000);
+                // If restart is required (status 515 immediately after entering pairing code on phone),
+                // reconnect virtually immediately so the WhatsApp server pairing handshake does not time out!
+                const retryDelay = isRestartRequired ? 200 : (statusCode === 440 ? 4000 : 2000);
                 setTimeout(() => {
                     startBot().catch(e => console.error('[Restart Error]:', e.message));
                 }, retryDelay);
