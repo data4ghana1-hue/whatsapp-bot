@@ -105,9 +105,32 @@ function findNodeBinary(): string {
     return '/opt/alt/alt-nodejs18/root/usr/bin/node';
 }
 
-// Helper: check if bot process is currently running on the server
+// Helper: get personal/business bot endpoint (hosted on Render)
+function getPersonalBotBaseUrl(): string {
+    if (defined('WHATSAPP_RENDER_BOT_URL') && !empty(WHATSAPP_RENDER_BOT_URL)) {
+        return rtrim(WHATSAPP_RENDER_BOT_URL, '/');
+    }
+    return 'https://whatsapp-bot-9loi.onrender.com';
+}
+
+// Helper: check if bot process is currently running on Render or locally
 function isBotProcessRunning(): bool {
-    // 1. Fast HTTP API status check
+    // 1. Check Render bot first (24/7 cloud instance)
+    $renderUrl = getPersonalBotBaseUrl() . '/api/status';
+    $ch = curl_init($renderUrl);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => 3,
+        CURLOPT_CONNECTTIMEOUT => 2,
+        CURLOPT_SSL_VERIFYPEER => false
+    ]);
+    $res = curl_exec($ch);
+    curl_close($ch);
+    if ($res && json_decode($res, true)) {
+        return true;
+    }
+
+    // 2. Fallback check on local port 3000
     $ch = curl_init('http://127.0.0.1:3000/api/status');
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
@@ -120,7 +143,7 @@ function isBotProcessRunning(): bool {
         return true;
     }
 
-    // 2. Process list check on Linux
+    // 3. Process list check on Linux
     if (strtoupper(substr(PHP_OS, 0, 3)) !== 'WIN') {
         $pgrep = @shell_exec("pgrep -f '[b]ot.js' 2>/dev/null");
         if (!empty(trim($pgrep ?: ''))) {
@@ -173,27 +196,36 @@ if ($action === 'get_status') {
     $stmt->execute([$userId]);
     $botRecord = $stmt->fetch(PDO::FETCH_ASSOC);
 
-    // 2. Fetch live bot status from Node.js or pairing_state.json
+    // 2. Fetch live bot status from Render bot (or local Node.js fallback)
     $liveStatus = 'offline';
     $connectedPhone = null;
     $livePairingCode = null;
 
-    // Check Node HTTP API first
-    $ch = curl_init('http://127.0.0.1:3000/api/status');
-    curl_setopt_array($ch, [
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT        => 2,
-        CURLOPT_CONNECTTIMEOUT => 1
-    ]);
-    $nodeRes = curl_exec($ch);
-    curl_close($ch);
+    $botEndpoints = [
+        getPersonalBotBaseUrl() . '/api/status',
+        'http://127.0.0.1:3000/api/status'
+    ];
+    foreach ($botEndpoints as $ep) {
+        $ch = curl_init($ep);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => 3,
+            CURLOPT_CONNECTTIMEOUT => 2,
+            CURLOPT_SSL_VERIFYPEER => false
+        ]);
+        $nodeRes = curl_exec($ch);
+        curl_close($ch);
 
-    if ($nodeRes) {
-        $nodeData = json_decode($nodeRes, true);
-        if ($nodeData) {
-            $liveStatus = $nodeData['status'] ?? 'offline';
-            $connectedPhone = $nodeData['phone'] ?? null;
-            $livePairingCode = $nodeData['pairing_code'] ?? null;
+        if ($nodeRes) {
+            $nodeData = json_decode($nodeRes, true);
+            if ($nodeData) {
+                $liveStatus = $nodeData['status'] ?? 'offline';
+                $connectedPhone = $nodeData['phone'] ?? null;
+                $livePairingCode = $nodeData['pairing_code'] ?? null;
+                if ($liveStatus === 'connected' || !empty($livePairingCode)) {
+                    break;
+                }
+            }
         }
     }
 
@@ -352,26 +384,34 @@ if ($action === 'request_pairing') {
         }
     }
 
-    // C. Direct HTTP request to Node.js bot server (Priority: local port 3000)
+    // C. Direct HTTP request to Node.js bot server (Priority: Render Cloud Bot, then local port 3000)
     // Timeout is 45s — bot needs up to ~30s to start fresh and get a pairing code from WhatsApp
-    $ch = curl_init('http://127.0.0.1:3000/api/request-pairing-code');
-    curl_setopt_array($ch, [
-        CURLOPT_POST           => true,
-        CURLOPT_POSTFIELDS     => $postPayload,
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT        => 45,
-        CURLOPT_CONNECTTIMEOUT => 4,
-        CURLOPT_HTTPHEADER     => ['Content-Type: application/json']
-    ]);
-    $nodeApiRes = curl_exec($ch);
-    curl_close($ch);
+    $pairingEndpoints = [
+        getPersonalBotBaseUrl() . '/api/request-pairing-code',
+        'http://127.0.0.1:3000/api/request-pairing-code'
+    ];
+    foreach ($pairingEndpoints as $reqUrl) {
+        $ch = curl_init($reqUrl);
+        curl_setopt_array($ch, [
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => $postPayload,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => 45,
+            CURLOPT_CONNECTTIMEOUT => 6,
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_HTTPHEADER     => ['Content-Type: application/json']
+        ]);
+        $nodeApiRes = curl_exec($ch);
+        curl_close($ch);
 
-    if ($nodeApiRes) {
-        $apiJson = json_decode($nodeApiRes, true);
-        if (!empty($apiJson['pairing_code'])) {
-            $pairingCode = $apiJson['pairing_code'];
-        } elseif (!empty($apiJson['message']) && ($apiJson['success'] ?? true) === false) {
-            $pairingError = $apiJson['message'];
+        if ($nodeApiRes) {
+            $apiJson = json_decode($nodeApiRes, true);
+            if (!empty($apiJson['pairing_code'])) {
+                $pairingCode = $apiJson['pairing_code'];
+                break;
+            } elseif (!empty($apiJson['message']) && ($apiJson['success'] ?? true) === false) {
+                $pairingError = $apiJson['message'];
+            }
         }
     }
 
@@ -542,14 +582,21 @@ if ($action === 'disconnect') {
     $botId = isset($_POST['bot_id']) ? (int)$_POST['bot_id'] : 0;
 
     // Signal bot to disconnect
-    $ch = curl_init('http://127.0.0.1:3000/api/logout');
-    curl_setopt_array($ch, [
-        CURLOPT_POST           => true,
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT        => 3
-    ]);
-    @curl_exec($ch);
-    @curl_close($ch);
+    $logoutEndpoints = [
+        getPersonalBotBaseUrl() . '/api/logout',
+        'http://127.0.0.1:3000/api/logout'
+    ];
+    foreach ($logoutEndpoints as $lUrl) {
+        $ch = curl_init($lUrl);
+        curl_setopt_array($ch, [
+            CURLOPT_POST           => true,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => 4,
+            CURLOPT_SSL_VERIFYPEER => false
+        ]);
+        @curl_exec($ch);
+        @curl_close($ch);
+    }
 
     // Clean pairing state files
     @unlink($pairingReqFile);

@@ -111,6 +111,7 @@ define('WHATSAPP_TOKEN', getenv('WHATSAPP_TOKEN') ?: 'EAAVbwPrkZA5EBSWYPZCejcQIT
 define('WHATSAPP_VERIFY_TOKEN', getenv('WHATSAPP_VERIFY_TOKEN') ?: 'EAAVbwPrkZA5EBSWYPZCejcQIT87IReAyjpXQZAAsjxQ6BWLvP6ZCwnabpoTbQ2S6UN0ZBnBJSKcYlNDiV7Yx3mSBTzJO3Ri6sy0XFFL9NeqcyIsDEbKDf2bFUwEQ10Az7Tena4DvwmQeMj4iQAZCeLAkURotrEpHaYLKDNPPsU8jYbhmnYd05Jq1tXbbWZB8wZDZD');
 define('WHATSAPP_PHONE_NUMBER_ID', getenv('WHATSAPP_PHONE_NUMBER_ID') ?: '1361643693689804');
 define('WHATSAPP_BUSINESS_ACCOUNT_ID', getenv('WHATSAPP_BUSINESS_ACCOUNT_ID') ?: '2143228069926641');
+define('WHATSAPP_RENDER_BOT_URL', getenv('WHATSAPP_RENDER_BOT_URL') ?: 'https://whatsapp-bot-9loi.onrender.com');
 
 
 // ── DB-backed system settings helpers ────────────────────────────────────────
@@ -762,6 +763,12 @@ function db_connect() {
             $pdo->exec("ALTER TABLE users ADD COLUMN phone VARCHAR(20) DEFAULT NULL");
         } catch (Exception $e) {}
         try {
+            $pdo->exec("ALTER TABLE users ADD COLUMN whatsapp_phone VARCHAR(30) DEFAULT NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE users ADD COLUMN whatsapp_notify_enabled TINYINT(1) DEFAULT 1");
+        } catch (Exception $e) {}
+        try {
             $pdo->exec("ALTER TABLE users ADD COLUMN wallet_balance DECIMAL(10,2) DEFAULT 0.00");
         } catch (Exception $e) {}
         try {
@@ -817,6 +824,12 @@ function db_connect() {
         } catch (Exception $e) {}
         try {
             $pdo->exec("ALTER TABLE bundle_sends ADD COLUMN client_reference VARCHAR(100) DEFAULT NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE bundle_sends ADD COLUMN refunded_at TIMESTAMP NULL DEFAULT NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("CREATE INDEX idx_bundle_sends_recip_refund ON bundle_sends (recipient_phone, status, refunded_at)");
         } catch (Exception $e) {}
         try {
             $pdo->exec("ALTER TABLE users ADD COLUMN webhook_url VARCHAR(255) DEFAULT NULL");
@@ -1370,6 +1383,12 @@ function sendRefundSmsToRecipient(string $recipientPhone, ?string $packagePlan =
 if (!function_exists('sendRefundSmsToUser')) {
     function sendRefundSmsToUser(PDO $pdo, int $userId, float $amount, $orderId, string $network = '', float $gb = 0, string $recipientPhone = ''): void {
         try {
+            if ((int)$orderId > 0) {
+                try {
+                    $pdo->prepare("UPDATE bundle_sends SET refunded_at = NOW() WHERE id = ? AND refunded_at IS NULL")->execute([(int)$orderId]);
+                } catch (Exception $ex) {}
+            }
+
             $settings = load_all_settings($pdo);
 
             // Master Refund SMS Switch
@@ -1425,8 +1444,266 @@ if (!function_exists('sendRefundSmsToUser')) {
             $smsApi = new SmsApi();
             $smsApi->setSenderId('BUS-REG');
             $smsApi->sendSms($cleanPhone, $msg, null, 'BUS-REG');
+
+            // Dispatch WhatsApp Refund Notification
+            try {
+                require_once __DIR__ . '/classes/WhatsAppNotification.php';
+                WhatsAppNotification::sendOrderNotification(
+                    (int)$userId,
+                    'refunded',
+                    $network,
+                    $gb,
+                    $recipientPhone,
+                    $orderId,
+                    $pdo
+                );
+            } catch (Exception $waEx) {
+                error_log("WhatsApp refund notification error for order #$orderId: " . $waEx->getMessage());
+            }
         } catch (Exception $e) {
             error_log("sendRefundSmsToUser error: " . $e->getMessage());
+        }
+    }
+}
+
+/**
+ * Helper to build phone variations for standard Ghanaian phone formats:
+ * e.g., '0241234567', '233241234567', '241234567', '+233241234567'
+ */
+if (!function_exists('getPhoneLookupVariants')) {
+    function getPhoneLookupVariants(string $phone): array {
+        $clean = preg_replace('/\D/', '', $phone);
+        if (empty($clean)) return [];
+        
+        $base9 = '';
+        if (strlen($clean) === 12 && substr($clean, 0, 3) === '233') {
+            $base9 = substr($clean, 3);
+        } elseif (strlen($clean) === 10 && substr($clean, 0, 1) === '0') {
+            $base9 = substr($clean, 1);
+        } elseif (strlen($clean) === 9) {
+            $base9 = $clean;
+        }
+
+        if (strlen($base9) === 9) {
+            return array_values(array_unique([
+                '0' . $base9,
+                '233' . $base9,
+                $base9,
+                '+233' . $base9
+            ]));
+        }
+
+        return array_values(array_unique([$clean, $phone]));
+    }
+}
+
+/**
+ * Check if a recipient phone number is currently restricted from placing orders
+ * due to an order refund within the 1-week (7 days) cooldown period.
+ *
+ * @param PDO      $pdo            Database connection
+ * @param string   $phone          Recipient phone number
+ * @param int|null $excludeOrderId Optional order ID to exclude
+ * @return array|null Returns restriction metadata if restricted, null if allowed.
+ */
+if (!function_exists('getPhoneRefundRestriction')) {
+    function getPhoneRefundRestriction(PDO $pdo, string $phone, ?int $excludeOrderId = null): ?array {
+        $cleanPhone = preg_replace('/\D/', '', $phone);
+        if (empty($cleanPhone)) return null;
+
+        $variants = getPhoneLookupVariants($phone);
+        if (empty($variants)) return null;
+
+        try {
+            $settings = function_exists('load_all_settings') ? load_all_settings($pdo) : [];
+            $cooldownDays = isset($settings['refund_cooldown_days']) ? (int)$settings['refund_cooldown_days'] : 7;
+            if ($cooldownDays <= 0) $cooldownDays = 7;
+            
+            $cooldownEnabled = !isset($settings['refund_cooldown_enabled']) || (bool)$settings['refund_cooldown_enabled'];
+            if (!$cooldownEnabled) return null;
+
+            $cooldownSeconds = $cooldownDays * 86400;
+
+            $inClause = implode(',', array_fill(0, count($variants), '?'));
+            $params = $variants;
+
+            $sql = "SELECT id, user_id, network, recipient_phone, gb_amount, status, created_at, updated_at, refunded_at,
+                           COALESCE(refunded_at, updated_at, created_at) AS refund_time
+                    FROM bundle_sends
+                    WHERE recipient_phone IN ($inClause)
+                      AND (status = 'refunded' OR refunded_at IS NOT NULL)
+                      AND COALESCE(refunded_at, updated_at, created_at) >= (NOW() - INTERVAL {$cooldownDays} DAY)";
+
+            if ($excludeOrderId !== null && $excludeOrderId > 0) {
+                $sql .= " AND id != ?";
+                $params[] = $excludeOrderId;
+            }
+
+            $sql .= " ORDER BY COALESCE(refunded_at, updated_at, created_at) DESC LIMIT 1";
+
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute($params);
+            $order = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$order || empty($order['refund_time'])) {
+                return null;
+            }
+
+            $refundTimestamp = strtotime($order['refund_time']);
+            $unlockTimestamp = $refundTimestamp + $cooldownSeconds;
+            $now = time();
+
+            if ($unlockTimestamp <= $now) {
+                return null;
+            }
+
+            $remainingSeconds = $unlockTimestamp - $now;
+            $remainingDays    = max(1, (int)ceil($remainingSeconds / 86400));
+            $daysLeft         = floor($remainingSeconds / 86400);
+            $hoursLeft        = floor(($remainingSeconds % 86400) / 3600);
+            
+            $timeRemainingText = ($daysLeft > 0)
+                ? "{$daysLeft} day" . ($daysLeft > 1 ? 's' : '') . ($hoursLeft > 0 ? " and {$hoursLeft} hr" . ($hoursLeft > 1 ? 's' : '') : '')
+                : "{$hoursLeft} hour" . ($hoursLeft > 1 ? 's' : '');
+
+            $displayPhone = $variants[0] ?? $phone;
+            $refundDateFmt = date('M j, Y', $refundTimestamp);
+            $unlockDateFmt = date('M j, Y \a\t g:i A', $unlockTimestamp);
+
+            return [
+                'restricted'         => true,
+                'order_id'           => (int)$order['id'],
+                'phone'              => $displayPhone,
+                'refund_time'        => $order['refund_time'],
+                'refund_date_fmt'    => $refundDateFmt,
+                'unlock_time'        => date('Y-m-d H:i:s', $unlockTimestamp),
+                'unlock_time_fmt'    => $unlockDateFmt,
+                'remaining_seconds'  => $remainingSeconds,
+                'remaining_days'     => $remainingDays,
+                'remaining_text'     => $timeRemainingText,
+                'message'            => "Recipient number {$displayPhone} had an order refunded on {$refundDateFmt} and is undergoing network approval. You cannot place an order for this number until 1 week after refund (available on {$unlockDateFmt}, in {$timeRemainingText})."
+            ];
+        } catch (Exception $e) {
+            error_log("getPhoneRefundRestriction error: " . $e->getMessage());
+            return null;
+        }
+    }
+}
+
+/**
+ * Batch check for multiple phone numbers. Returns map of [phone => restrictionInfo].
+ *
+ * @param PDO   $pdo    Database connection
+ * @param array $phones Array of phone numbers
+ * @return array Associative array of restricted phones
+ */
+if (!function_exists('getBatchPhoneRefundRestrictions')) {
+    function getBatchPhoneRefundRestrictions(PDO $pdo, array $phones): array {
+        if (empty($phones)) return [];
+
+        $restricted = [];
+        $variantMap = [];
+        $allVariants = [];
+
+        foreach ($phones as $p) {
+            $vars = getPhoneLookupVariants((string)$p);
+            foreach ($vars as $v) {
+                $variantMap[$v][] = (string)$p;
+                $allVariants[] = $v;
+            }
+        }
+
+        $allVariants = array_values(array_unique($allVariants));
+        if (empty($allVariants)) return [];
+
+        try {
+            $settings = function_exists('load_all_settings') ? load_all_settings($pdo) : [];
+            $cooldownDays = isset($settings['refund_cooldown_days']) ? (int)$settings['refund_cooldown_days'] : 7;
+            if ($cooldownDays <= 0) $cooldownDays = 7;
+            
+            $cooldownEnabled = !isset($settings['refund_cooldown_enabled']) || (bool)$settings['refund_cooldown_enabled'];
+            if (!$cooldownEnabled) return [];
+
+            $cooldownSeconds = $cooldownDays * 86400;
+            $now = time();
+
+            $inClause = implode(',', array_fill(0, count($allVariants), '?'));
+            $sql = "SELECT id, user_id, network, recipient_phone, gb_amount, status, created_at, updated_at, refunded_at,
+                           COALESCE(refunded_at, updated_at, created_at) AS refund_time
+                    FROM bundle_sends
+                    WHERE recipient_phone IN ($inClause)
+                      AND (status = 'refunded' OR refunded_at IS NOT NULL)
+                      AND COALESCE(refunded_at, updated_at, created_at) >= (NOW() - INTERVAL {$cooldownDays} DAY)
+                    ORDER BY COALESCE(refunded_at, updated_at, created_at) DESC";
+
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute($allVariants);
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            foreach ($rows as $order) {
+                $refundTimestamp = strtotime($order['refund_time']);
+                $unlockTimestamp = $refundTimestamp + $cooldownSeconds;
+                if ($unlockTimestamp <= $now) continue;
+
+                $remainingSeconds = $unlockTimestamp - $now;
+                $remainingDays    = max(1, (int)ceil($remainingSeconds / 86400));
+                $daysLeft         = floor($remainingSeconds / 86400);
+                $hoursLeft        = floor(($remainingSeconds % 86400) / 3600);
+                
+                $timeRemainingText = ($daysLeft > 0)
+                    ? "{$daysLeft} day" . ($daysLeft > 1 ? 's' : '') . ($hoursLeft > 0 ? " and {$hoursLeft} hr" . ($hoursLeft > 1 ? 's' : '') : '')
+                    : "{$hoursLeft} hour" . ($hoursLeft > 1 ? 's' : '');
+
+                $recip = $order['recipient_phone'];
+                $matchedOrigs = $variantMap[$recip] ?? [$recip];
+
+                $refundDateFmt = date('M j, Y', $refundTimestamp);
+                $unlockDateFmt = date('M j, Y \a\t g:i A', $unlockTimestamp);
+
+                $info = [
+                    'restricted'         => true,
+                    'order_id'           => (int)$order['id'],
+                    'phone'              => $recip,
+                    'refund_time'        => $order['refund_time'],
+                    'refund_date_fmt'    => $refundDateFmt,
+                    'unlock_time'        => date('Y-m-d H:i:s', $unlockTimestamp),
+                    'unlock_time_fmt'    => $unlockDateFmt,
+                    'remaining_seconds'  => $remainingSeconds,
+                    'remaining_days'     => $remainingDays,
+                    'remaining_text'     => $timeRemainingText,
+                    'message'            => "Recipient number {$recip} had an order refunded on {$refundDateFmt} and is undergoing network approval. You cannot place an order for this number until 1 week after refund (available on {$unlockDateFmt}, in {$timeRemainingText})."
+                ];
+
+                foreach ($matchedOrigs as $orig) {
+                    if (!isset($restricted[$orig])) {
+                        $restricted[$orig] = $info;
+                    }
+                }
+            }
+        } catch (Exception $e) {
+            error_log("getBatchPhoneRefundRestrictions error: " . $e->getMessage());
+        }
+
+        return $restricted;
+    }
+}
+
+/**
+ * Helper to mark an order as refunded and stamp refunded_at.
+ */
+if (!function_exists('markOrderRefunded')) {
+    function markOrderRefunded(PDO $pdo, int $orderId, string $status = 'refunded', ?string $message = null): bool {
+        try {
+            if ($message !== null) {
+                $stmt = $pdo->prepare("UPDATE bundle_sends SET status = ?, message = ?, refunded_at = NOW(), updated_at = NOW() WHERE id = ?");
+                return $stmt->execute([$status, $message, $orderId]);
+            } else {
+                $stmt = $pdo->prepare("UPDATE bundle_sends SET status = ?, refunded_at = NOW(), updated_at = NOW() WHERE id = ?");
+                return $stmt->execute([$status, $orderId]);
+            }
+        } catch (Exception $e) {
+            error_log("markOrderRefunded error: " . $e->getMessage());
+            return false;
         }
     }
 }
