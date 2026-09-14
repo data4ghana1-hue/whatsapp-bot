@@ -2530,14 +2530,13 @@ async function startBot() {
                 currentBaileysSocket = null;
             }
 
-            // Status code 515 = DisconnectReason.restartRequired (standard after pairing handshake)
+            // Status code 515 = DisconnectReason.restartRequired (standard after QR scan or pairing code handshake)
             const isRestartRequired = (statusCode === DisconnectReason.restartRequired || statusCode === 515);
+            // Only actual logout when a previously registered session is explicitly disconnected/logged out
             const isActualLogout = isRegistered && (statusCode === DisconnectReason.loggedOut) && !isRestartRequired;
-            const isPairingActive = Boolean(activePairingCode || activePairingPhone || (pairingTimestamp && (Date.now() - pairingTimestamp < 180000)));
-            const isStalePairing = !isRegistered && !isPairingActive && (statusCode === 401 || statusCode === 405);
 
-            if (isActualLogout || isStalePairing) {
-                console.log('[WhatsApp] Clearing auth directory to allow fresh connection...');
+            if (isActualLogout) {
+                console.log('[WhatsApp] Explicit logout detected. Clearing auth directory to allow fresh connection...');
                 try {
                     fs.rmSync(AUTH_DIR, { recursive: true, force: true });
                 } catch (e) {}
@@ -2554,7 +2553,7 @@ async function startBot() {
                     startBot().catch(e => console.error('[Restart Error]:', e.message));
                 }, 2000);
             } else {
-                // If restart is required (status 515 immediately after entering pairing code on phone),
+                // If restart is required (e.g. status 515 after QR scan or pairing code entry on phone),
                 // reconnect virtually immediately so the WhatsApp server pairing handshake does not time out!
                 const retryDelay = isRestartRequired ? 200 : (statusCode === 440 ? 4000 : 2000);
                 setTimeout(() => {
