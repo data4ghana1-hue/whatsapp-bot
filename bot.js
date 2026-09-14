@@ -49,8 +49,16 @@ async function loadBaileys() {
     Browsers = baileys.Browsers;
 }
 
-const qrcode = require('qrcode-terminal');
-const QRCodeImage = require('qrcode');
+let qrcode = null;
+try {
+    qrcode = require('qrcode-terminal');
+} catch (e) {}
+
+let QRCodeImage = null;
+try {
+    QRCodeImage = require('qrcode');
+} catch (e) {}
+
 const pino = require('pino');
 const path = require('path');
 const fs = require('fs');
@@ -744,7 +752,7 @@ async function handleCustomerInteractiveSession(phone, text, name) {
                     user_id: user.id,
                     username: user.username,
                     wallet_balance: bal,
-                    role: user.role || 'client'
+                    role: user.role && user.role !== 'client' ? user.role : 'vip'
                 };
 
                 if (bal < 3.50) {
@@ -755,7 +763,7 @@ async function handleCustomerInteractiveSession(phone, text, name) {
 
                 session.step = 'order_select_network';
                 session.timestamp = now;
-                return `*User Verified*: *${user.username}* (\`APEX-${user.id}\`)\n*Tier*: *${role}*\n*Wallet Balance*: *GHS ${bal.toFixed(2)}*\n━━━━━━━━━━━━━━━━━━━━━\nPlease choose an option by replying with a number (*1 - 5*):\n\n1. *MTN Data Bundles*\n2. *Telecel Data Bundles*\n3. *AT / AirtelTigo Ishare*\n4. *MTN AFA Registration*\n5. *Result Checker Cards (WASSCE / BECE)*\n\n_(Reply *cancel* anytime to abort)_`;
+                return `*User Verified*: *${user.username}* (\`APEX-${user.id}\`)\n*Tier*: *${role}*\n*Wallet Balance*: *GHS ${bal.toFixed(2)}*\n━━━━━━━━━━━━━━━━━━━━━\nPlease choose an option by replying with a number (*1 - 5*):\n\n1. *MTN Data Bundles* (VIP Rates)\n2. *Telecel Data Bundles* (VIP Rates)\n3. *AT / AirtelTigo Ishare* (VIP Rates)\n4. *MTN AFA Registration* (GHS 10.00)\n5. *Result Checker Cards (WASSCE / BECE)* (GHS 17.50)\n\n_(Reply *cancel* anytime to abort)_`;
             } else if (apiRes && apiRes.success === false) {
                 return `*User Code Not Found*\n━━━━━━━━━━━━━━━━━━━━━\nUser Code \`${raw}\` was not found in our database.\n\n*Don't have an account?*\nOrder directly via our instant link:\nhttps://payroute.name/mr-nipah\n\n_(Or re-enter your valid User Code, or reply *cancel* to abort)_`;
             } else {
@@ -773,32 +781,32 @@ async function handleCustomerInteractiveSession(phone, text, name) {
             else if (lower === '5' || lower.includes('checker') || lower.includes('result') || lower.includes('card') || lower.includes('voucher')) network = 'CHECKER';
 
             if (!network) {
-                return `*Invalid Option*\nPlease reply with a number from *1 to 5*:\n1. *MTN Data*\n2. *Telecel Data*\n3. *AT Ishare*\n4. *MTN AFA*\n5. *Result Checker Cards*\n\n_(Reply *cancel* to abort)_`;
+                return `*Invalid Option*\nPlease reply with a number from *1 to 5*:\n1. *MTN Data*\n2. *Telecel Data*\n3. *AT Ishare*\n4. *MTN AFA (GHS 10.00)*\n5. *Result Checker Cards (GHS 17.50)*\n\n_(Reply *cancel* to abort)_`;
             }
 
             if (network === 'CHECKER') {
                 session.step = 'order_buy_checker';
                 session.timestamp = now;
-                return `*Result Checker — Buy WAEC Cards*\n━━━━━━━━━━━━━━━━━━━━━\nUser: *${session.data.username}* (\`APEX-${session.data.user_id}\`)\nBalance: *GHS ${session.data.wallet_balance.toFixed(2)}*\n━━━━━━━━━━━━━━━━━━━━━\nSelect Result Checker Card to purchase:\n\n1. *WASSCE Result Checker* — *GHS 20.00*\n2. *BECE Result Checker* — *GHS 20.00*\n\n*Instant Delivery*: Card PIN & Serial Number will be sent right here immediately!\n\n_(Reply with *1* or *2*, or reply *cancel* to abort)_`;
+                return `*Result Checker — Buy WAEC Cards (VIP Price)*\n━━━━━━━━━━━━━━━━━━━━━\nUser: *${session.data.username}* (\`APEX-${session.data.user_id}\`)\nTier: *VIP*\nBalance: *GHS ${session.data.wallet_balance.toFixed(2)}*\n━━━━━━━━━━━━━━━━━━━━━\nSelect Result Checker Card to purchase:\n\n1. *WASSCE Result Checker* — *GHS 17.50*\n2. *BECE Result Checker* — *GHS 17.50*\n\n*Instant Delivery*: Card PIN & Serial Number will be sent right here immediately!\n\n_(Reply with *1* or *2*, or reply *cancel* to abort)_`;
             }
 
             if (network === 'AFA') {
                 session.step = 'order_afa_details';
                 session.timestamp = now;
-                return `*MTN AFA Registration (GHS 15.00)*\n━━━━━━━━━━━━━━━━━━━━━\nPlease reply with the registration details in this format:\n• Example: \`0541145310 Eric Fosu GHA-123456789-0\`\n\n_(Reply *cancel* to abort)_`;
+                return `*MTN AFA Registration — VIP Price: GHS 10.00*\n━━━━━━━━━━━━━━━━━━━━━\nPlease reply with the registration details in this format:\n• Example: \`0541145310 Eric Fosu GHA-123456789-0\`\n\n_(Reply *cancel* to abort)_`;
             }
 
             session.data.network = network;
             session.step = 'order_enter_bundle';
             session.timestamp = now;
 
-            const priceRes = await callWebsiteApi({ op: 'get_price', network, amount: 1, user_id: session.data.user_id, role: session.data.role });
-            const rateStr = (priceRes && priceRes.price) ? ` (Rate: *GHS ${parseFloat(priceRes.price).toFixed(2)} / GB*)` : '';
+            const priceRes = await callWebsiteApi({ op: 'get_price', network, amount: 1, user_id: session.data.user_id, role: session.data.role || 'vip' });
+            const rateStr = (priceRes && priceRes.price) ? ` (VIP Rate: *GHS ${parseFloat(priceRes.price).toFixed(2)} / GB*)` : '';
 
-            return `*${network} Data Bundle Order*\n━━━━━━━━━━━━━━━━━━━━━\nUser: *${session.data.username}* (\`APEX-${session.data.user_id}\`)${rateStr}\nBalance: *GHS ${session.data.wallet_balance.toFixed(2)}*\n\nPlease enter the *Recipient Phone Number* and *GB size*:\nFormat: \`<phone> <GB>\`\n\n• Example: \`0559623850 2\`\n• Example: \`0241234567 5\`\n\n_(Reply *cancel* to abort)_`;
+            return `*${network} Data Bundle Order (VIP)*\n━━━━━━━━━━━━━━━━━━━━━\nUser: *${session.data.username}* (\`APEX-${session.data.user_id}\`)${rateStr}\nBalance: *GHS ${session.data.wallet_balance.toFixed(2)}*\n\nPlease enter the *Recipient Phone Number* and *GB size*:\nFormat: \`<phone> <GB>\`\n\n• Example: \`0559623850 2\`\n• Example: \`0241234567 5\`\n\n_(Reply *cancel* to abort)_`;
         }
 
-        // Step 2B: Buy Result Checker Cards
+        // Step 2B: Buy Result Checker Cards (VIP: GHS 17.50)
         if (session.step === 'order_buy_checker') {
             let category = null;
             if (lower === '1' || lower.includes('wassce')) category = 'wassce';
@@ -808,11 +816,11 @@ async function handleCustomerInteractiveSession(phone, text, name) {
                 return `*Invalid Selection*\nPlease reply with *1* (WASSCE) or *2* (BECE).\n\n_(Reply *cancel* to abort)_`;
             }
 
-            const cost = 20.00;
+            const cost = 17.50;
             if (session.data.wallet_balance < cost) {
                 session.step = 'order_topup_txid';
                 session.timestamp = now;
-                return `*Insufficient Wallet Balance*\n━━━━━━━━━━━━━━━━━━━━━\n• Item: *${category.toUpperCase()} Result Checker Card*\n• Price: *GHS ${cost.toFixed(2)}*\n• Your Balance: *GHS ${session.data.wallet_balance.toFixed(2)}*\n━━━━━━━━━━━━━━━━━━━━━\nPlease top up your wallet:\nMoMo Number: \`0530429556\`\nAccount Name: *Sir Esarq Ent (Eric Fosu)*\nPayment Reference: \`APEX-${session.data.user_id}\`\n\nAfter sending money, reply with your *Transaction ID* right here to automatically credit your wallet:\n\n_(Reply *cancel* to abort)_`;
+                return `*Insufficient Wallet Balance*\n━━━━━━━━━━━━━━━━━━━━━\n• Item: *${category.toUpperCase()} Result Checker Card*\n• VIP Price: *GHS ${cost.toFixed(2)}*\n• Your Balance: *GHS ${session.data.wallet_balance.toFixed(2)}*\n━━━━━━━━━━━━━━━━━━━━━\nPlease top up your wallet:\nMoMo Number: \`0530429556\`\nAccount Name: *Sir Esarq Ent (Eric Fosu)*\nPayment Reference: \`APEX-${session.data.user_id}\`\n\nAfter sending money, reply with your *Transaction ID* right here to automatically credit your wallet:\n\n_(Reply *cancel* to abort)_`;
             }
 
             const buyRes = await callWebsiteApi({
@@ -828,10 +836,10 @@ async function handleCustomerInteractiveSession(phone, text, name) {
             const pin = buyRes?.data?.pin || (String(Math.floor(100000 + Math.random() * 900000)) + String(Math.floor(100000 + Math.random() * 900000)));
             const newBal = (buyRes?.data?.new_balance !== undefined) ? parseFloat(buyRes.data.new_balance).toFixed(2) : (session.data.wallet_balance - cost).toFixed(2);
 
-            return `*${category.toUpperCase()} RESULT CHECKER PURCHASE SUCCESSFUL!*\n━━━━━━━━━━━━━━━━━━━━━\nUser: *${session.data.username}* (\`APEX-${session.data.user_id}\`)\nCost Deducted: *GHS ${cost.toFixed(2)}*\nNew Balance: *GHS ${newBal}*\n━━━━━━━━━━━━━━━━━━━━━\n*VOUCHER DETAILS (INSTANT)*:\n• Exam: *${category.toUpperCase()} Results Checker*\n• Serial Number: \`${serial}\`\n• Card PIN: \`${pin}\`\n━━━━━━━━━━━━━━━━━━━━━\n*How to Check Your Result Now*:\nReply *check result* (or option *2*) to check your WAEC result automatically right here!`;
+            return `*${category.toUpperCase()} RESULT CHECKER PURCHASE SUCCESSFUL!*\n━━━━━━━━━━━━━━━━━━━━━\nUser: *${session.data.username}* (\`APEX-${session.data.user_id}\`)\nTier: *VIP*\nCost Deducted: *GHS ${cost.toFixed(2)}*\nNew Balance: *GHS ${newBal}*\n━━━━━━━━━━━━━━━━━━━━━\n*VOUCHER DETAILS (INSTANT)*:\n• Exam: *${category.toUpperCase()} Results Checker*\n• Serial Number: \`${serial}\`\n• Card PIN: \`${pin}\`\n━━━━━━━━━━━━━━━━━━━━━\n*How to Check Your Result Now*:\nReply *check result* (or option *2*) to check your WAEC result automatically right here!`;
         }
 
-        // Step 2C: MTN AFA Registration Details
+        // Step 2C: MTN AFA Registration Details (VIP: GHS 10.00)
         if (session.step === 'order_afa_details') {
             const afaMatch = raw.match(/(\d{9,12})\s+([A-Za-z\s]{3,50})\s+(GHA\-[0-9\-]+|[A-Za-z0-9\-]{8,25})/i);
             if (!afaMatch) {
@@ -841,12 +849,12 @@ async function handleCustomerInteractiveSession(phone, text, name) {
             const afaPhone = afaMatch[1];
             const afaName = afaMatch[2].trim();
             const afaGha = afaMatch[3].toUpperCase().trim();
-            const cost = 15.00;
+            const cost = 10.00;
 
             if (session.data.wallet_balance < cost) {
                 session.step = 'order_topup_txid';
                 session.timestamp = now;
-                return `*Insufficient Balance for AFA Registration!*\n━━━━━━━━━━━━━━━━━━━━━\n• Registration Fee: *GHS 15.00*\n• Your Balance: *GHS ${session.data.wallet_balance.toFixed(2)}*\n━━━━━━━━━━━━━━━━━━━━━\nPlease top up your wallet:\nMoMo Number: \`0530429556\`\nAccount Name: *Sir Esarq Ent (Eric Fosu)*\nPayment Reference: \`APEX-${session.data.user_id}\`\n\nAfter sending money, reply with your *Transaction ID* right here to automatically credit and register!\n\n_(Reply *cancel* to abort)_`;
+                return `*Insufficient Balance for AFA Registration!*\n━━━━━━━━━━━━━━━━━━━━━\n• VIP Registration Fee: *GHS 10.00*\n• Your Balance: *GHS ${session.data.wallet_balance.toFixed(2)}*\n━━━━━━━━━━━━━━━━━━━━━\nPlease top up your wallet:\nMoMo Number: \`0530429556\`\nAccount Name: *Sir Esarq Ent (Eric Fosu)*\nPayment Reference: \`APEX-${session.data.user_id}\`\n\nAfter sending money, reply with your *Transaction ID* right here to automatically credit and register!\n\n_(Reply *cancel* to abort)_`;
             }
 
             const afaRes = await callWebsiteApi({
@@ -1344,12 +1352,12 @@ async function handleCustomerInteractiveSession(phone, text, name) {
         if (userRes && userRes.success && userRes.user) {
             const u = userRes.user;
             const bal = parseFloat(u.wallet_balance || 0);
-            const role = (u.role || 'client').toUpperCase();
+            const role = (u.role && u.role !== 'client' ? u.role : 'vip').toUpperCase();
 
             if (bal < 3.50) {
                 customerSessions.set(phone, {
                     step: 'order_topup_txid',
-                    data: { user_id: u.id, username: u.username, wallet_balance: bal, role: u.role || 'client' },
+                    data: { user_id: u.id, username: u.username, wallet_balance: bal, role: u.role && u.role !== 'client' ? u.role : 'vip' },
                     timestamp: now
                 });
                 return `*User Verified*: *${u.username}* (\`APEX-${u.id}\`)\n*Tier*: *${role}*\n*Current Wallet Balance*: *GHS ${bal.toFixed(2)}*\n━━━━━━━━━━━━━━━━━━━━━\n*Insufficient Wallet Balance*\n\nYour balance is too low to place an order. Please top up your wallet:\n\nMoMo Number: \`0530429556\`\nAccount Name: *Sir Esarq Ent (Eric Fosu)*\nPayment Reference: \`APEX-${u.id}\`\n\nAfter sending money, reply with your *Transaction ID* right here to automatically credit your wallet:\n\n_(Reply *cancel* to abort)_`;
@@ -1357,10 +1365,10 @@ async function handleCustomerInteractiveSession(phone, text, name) {
 
             customerSessions.set(phone, {
                 step: 'order_select_network',
-                data: { user_id: u.id, username: u.username, wallet_balance: bal, role: u.role || 'client' },
+                data: { user_id: u.id, username: u.username, wallet_balance: bal, role: u.role && u.role !== 'client' ? u.role : 'vip' },
                 timestamp: now
             });
-            return `*User Verified*: *${u.username}* (\`APEX-${u.id}\`)\n*Tier*: *${role}*\n*Wallet Balance*: *GHS ${bal.toFixed(2)}*\n━━━━━━━━━━━━━━━━━━━━━\nPlease choose an option by replying with a number (*1 - 5*):\n\n1. *MTN Data Bundles*\n2. *Telecel Data Bundles*\n3. *AT / AirtelTigo Ishare*\n4. *MTN AFA Registration*\n5. *Result Checker Cards (WASSCE / BECE)*\n\n_(Reply *cancel* anytime to abort)_`;
+            return `*User Verified*: *${u.username}* (\`APEX-${u.id}\`)\n*Tier*: *${role}*\n*Wallet Balance*: *GHS ${bal.toFixed(2)}*\n━━━━━━━━━━━━━━━━━━━━━\nPlease choose an option by replying with a number (*1 - 5*):\n\n1. *MTN Data Bundles* (VIP Rates)\n2. *Telecel Data Bundles* (VIP Rates)\n3. *AT / AirtelTigo Ishare* (VIP Rates)\n4. *MTN AFA Registration* (GHS 10.00)\n5. *Result Checker Cards (WASSCE / BECE)* (GHS 17.50)\n\n_(Reply *cancel* anytime to abort)_`;
         }
     }
 
@@ -2498,14 +2506,25 @@ async function startBot() {
                 console.log(' 3. Point your camera at this QR code:');
                 console.log('-----------------------------------------------------\n');
                 try {
-                    qrcode.generate(qr, { small: true });
+                    if (qrcode && typeof qrcode.generate === 'function') {
+                        qrcode.generate(qr, { small: true });
+                    }
                 } catch (e) {}
 
                 try {
-                    QRCodeImage.toFile(path.resolve(__dirname, 'qr.png'), qr, { scale: 8 });
-                    QRCodeImage.toDataURL(qr, (err, url) => {
-                        if (!err && url) currentQrDataUrl = url;
-                    });
+                    fs.writeFileSync(path.resolve(__dirname, 'qr.txt'), qr, 'utf8');
+                } catch (e) {}
+
+                // Reliable fallback image URL in case qrcode native canvas/module is missing
+                currentQrDataUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=260x260&margin=10&data=' + encodeURIComponent(qr);
+
+                try {
+                    if (QRCodeImage) {
+                        QRCodeImage.toFile(path.resolve(__dirname, 'qr.png'), qr, { scale: 8 });
+                        QRCodeImage.toDataURL(qr, (err, url) => {
+                            if (!err && url) currentQrDataUrl = url;
+                        });
+                    }
                 } catch (err) {}
             }
         }
