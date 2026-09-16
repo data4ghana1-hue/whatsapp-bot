@@ -1017,40 +1017,25 @@ async function handleCustomerInteractiveSession(phone, text, name) {
             });
         }
 
-        // Step 6: Customer Support Report Session
-        if (session.step === 'report_awaiting_details') {
-            customerSessions.delete(phone);
+        // Step 6: Customer Support Report Session (Requires Data Balance Screenshot)
+        if (session.step === 'report_awaiting_screenshot' || session.step === 'report_awaiting_details') {
             if (['cancel', 'exit', 'stop', 'quit', 'abort', '0'].includes(lower)) {
+                customerSessions.delete(phone);
                 return `*Support request cancelled.*\n\nType *menu* to return to the main menu.`;
             }
 
-            const ticketCode = 'TICK-' + Math.floor(100000 + Math.random() * 900000);
-            const orderIdMatch = raw.match(/#?(\d{4,8})/);
-            const orderId = orderIdMatch ? parseInt(orderIdMatch[1]) : null;
+            // Append additional notes to existing report data
+            session.data.report_text = (session.data.report_text ? session.data.report_text + "\n" : "") + raw;
+            session.step = 'report_awaiting_screenshot';
+            session.timestamp = now;
 
-            const botReply = `*Support Ticket Created*\n`
+            return `⚠️ *Screenshot of Data Balance Required*\n`
                 + `━━━━━━━━━━━━━━━━━━━━━\n`
-                + `• Ticket ID: *${ticketCode}*\n`
-                + `• Status: *Under Investigation*\n`
-                + `• Priority: *High*\n`
-                + `━━━━━━━━━━━━━━━━━━━━━\n`
-                + `Thank you for reporting, *${name || 'Customer'}*. Our customer support manager has been alerted and will review your issue immediately.\n\n`
-                + `Direct Support Line: *0553381853*\n`
-                + `Direct WhatsApp: https://wa.me/233553381853\n`
-                + `Average response time: *Under 10 minutes*`;
-
-            await callWebsiteApi({
-                op: 'log_ticket',
-                ticket_code: ticketCode,
-                phone: phone,
-                name: name || 'Customer',
-                message: raw,
-                issue_type: session.data?.issue_type || 'customer_inquiry',
-                order_id: orderId,
-                bot_reply: botReply
-            });
-
-            return botReply;
+                + `We have recorded your update:\n`
+                + `_"${raw}"_\n\n`
+                + `🚨 *IMPORTANT:* You *MUST* provide a clear screenshot of your current data balance (dial *138# or *124# or check your network app), *else there will be NO resolution* for this complaint.\n\n`
+                + `👉 *Please upload/send your screenshot image directly here to proceed.*\n`
+                + `_(Reply *cancel* anytime to abort)_`;
         }
 
         // ── WAEC RESULT CHECKER INTERACTIVE STEPS ──
@@ -1267,14 +1252,7 @@ async function handleCustomerInteractiveSession(phone, text, name) {
     // Short inquiry triggers: "5", "report", "support", "agent"
     const isShortReportTrigger = lower === '5' || lower === '5.' || ['talk to an agent', 'talk to agent', 'agent', 'support', 'human', 'report', 'complaint', 'issue', 'problem', 'help desk', 'help'].includes(lower);
 
-    if (isShortReportTrigger) {
-        customerSessions.set(phone, { step: 'report_awaiting_details', data: { issue_type: 'customer_inquiry' }, timestamp: now });
-        return `*Apex Prime Tech — Customer Support Desk*\n━━━━━━━━━━━━━━━━━━━━━\nHello *${name || 'Customer'}*, our support agents are ready to assist you!\n\nPlease describe your request, question, or issue in detail below:\n_(If you have an Order ID or Transaction Reference, please include it)_\n\n_(Reply *cancel* anytime to abort)_`;
-    }
-
-    if (isReportMsg && raw.length >= 8) {
-        customerSessions.delete(phone);
-        const ticketCode = 'TICK-' + Math.floor(100000 + Math.random() * 900000);
+    if (isShortReportTrigger || (isReportMsg && raw.length >= 8)) {
         let orderId = null;
         let orderDisplay = null;
         let recipientPhone = null;
@@ -1292,31 +1270,27 @@ async function handleCustomerInteractiveSession(phone, text, name) {
             recipientPhone = phoneMatch[1].trim();
         }
 
-        const botReply = `*Support Ticket Created*\n`
-            + `━━━━━━━━━━━━━━━━━━━━━\n`
-            + `• Ticket ID: *${ticketCode}*\n`
-            + (orderDisplay ? `• Order ID: *${orderDisplay}*\n` : '')
-            + (recipientPhone ? `• Recipient: \`${recipientPhone}\`\n` : '')
-            + `• Status: *Under Investigation*\n`
-            + `• Priority: *High*\n`
-            + `━━━━━━━━━━━━━━━━━━━━━\n`
-            + `Thank you for reporting, *${name || 'Customer'}*. Our customer support manager has been alerted and will review your issue immediately.\n\n`
-            + `Direct Support Line: *0553381853*\n`
-            + `Direct WhatsApp: https://wa.me/233553381853\n`
-            + `Average response time: *Under 10 minutes*`;
-
-        await callWebsiteApi({
-            op: 'log_ticket',
-            ticket_code: ticketCode,
-            phone: phone,
-            name: name || 'Customer',
-            message: raw,
-            issue_type: 'order_issue',
-            order_id: orderId,
-            bot_reply: botReply
+        customerSessions.set(phone, {
+            step: 'report_awaiting_screenshot',
+            data: {
+                report_text: raw,
+                order_id: orderId,
+                order_display: orderDisplay,
+                recipient_phone: recipientPhone,
+                name: name || 'Customer',
+                issue_type: 'order_issue'
+            },
+            timestamp: now
         });
 
-        return botReply;
+        return `📝 *Customer Support & Report Desk*\n`
+            + `━━━━━━━━━━━━━━━━━━━━━\n`
+            + `Hello *${name || 'Customer'}*, your report has been received!\n\n`
+            + `⚠️ *MANDATORY ACTION REQUIRED:*\n`
+            + `Please add/send a *screenshot of your current data balance* (e.g. dial *138# or *124# or check your network app) as proof.\n\n`
+            + `🚨 *IMPORTANT:* You *MUST* provide a screenshot of your data balance, *else there will be NO resolution* for this complaint.\n\n`
+            + `👉 *Please upload/send your screenshot image directly here to proceed.*\n`
+            + `_(Reply *cancel* anytime to abort)_`;
     }
 
     // 6. Trigger "6" / "other services" (Academic Writing, Website Design, Apple Plans, Merchant Onboarding)
@@ -2801,12 +2775,20 @@ async function startBot() {
                 cacheMessage(msg).catch(() => {});
             }
 
-            // Extract message text across different message types
+            // Extract message text and media across different message types
             const messageContent = msg.message;
             if (!messageContent) continue;
 
+            const imageObj = messageContent.imageMessage
+                || messageContent.viewOnceMessage?.message?.imageMessage
+                || messageContent.viewOnceMessageV2?.message?.imageMessage
+                || (messageContent.documentMessage?.mimetype?.startsWith('image/') ? messageContent.documentMessage : null);
+            const hasImage = Boolean(imageObj);
+            const imageCaption = imageObj?.caption || messageContent.documentMessage?.caption || '';
+
             const text = messageContent.conversation
                 || messageContent.extendedTextMessage?.text
+                || imageCaption
                 || messageContent.buttonsResponseMessage?.selectedButtonId
                 || messageContent.listResponseMessage?.singleSelectReply?.selectedRowId
                 || messageContent.templateButtonReplyMessage?.selectedId
@@ -2843,7 +2825,7 @@ async function startBot() {
                 continue;
             }
 
-            if (!text.trim()) continue;
+            if (!text.trim() && !hasImage) continue;
 
             console.log(`[Incoming Message] From: ${pushName} (${senderPhone}) | Body: "${text}"`);
 
@@ -2930,10 +2912,114 @@ async function startBot() {
             const trimmedMsgText = text.trim();
             const activeCustomerSession = customerSessions.get(senderPhone);
             const isReportPattern = /(?:\b(?:report|complaint|complain|issue|problem|ticket)\b|\b(?:hasn'?t|haven'?t|didn'?t|not|never)\s+(?:received?|arrived?|delivered?|got)\b|\b(?:yet\s+to\s+receive|delayed|pending\s+too\s+long|failed\s+delivery)\b|\b(?:help\s+me\s+resolve|resolve\s+this)\b|(?:order\s*id\s*[:#]|order\s*#\s*\d+))/i;
+            const isWaitingScreenshot = Boolean(activeCustomerSession && (
+                activeCustomerSession.step === 'report_awaiting_screenshot' ||
+                activeCustomerSession.step === 'report_awaiting_details'
+            ));
             const isReportIncoming = isReportPattern.test(trimmedMsgText) ||
                 /^(?:5|5\.|\.report|report|complaint|issue|problem|help)\b/i.test(trimmedMsgText) ||
-                (activeCustomerSession && activeCustomerSession.step === 'report_awaiting_details');
+                isWaitingScreenshot;
 
+            // 12a. Customer sends picture / screenshot for report resolution
+            const isReportWithImage = hasImage && (isWaitingScreenshot || isReportPattern.test(trimmedMsgText));
+
+            if (isReportWithImage) {
+                console.log(`[Screenshot Received] From ${pushName} (${senderPhone}) for report resolution`);
+                try {
+                    // Bot reacts with ✅ to the customer's screenshot
+                    await sock.sendMessage(from, { react: { text: '✅', key: msg.key } });
+                    console.log(`[Auto-React] Reacted ✅ to screenshot from ${senderPhone}`);
+                } catch (reactErr) {
+                    console.error('[Auto-React Screenshot Error]:', reactErr.message);
+                }
+
+                // Download the screenshot image buffer
+                let imgBuffer = null;
+                try {
+                    imgBuffer = await downloadMediaBuffer(imageObj, 'image');
+                } catch (dlErr) {
+                    console.error('[Download Screenshot Error]:', dlErr.message);
+                }
+
+                // Prepare ticket and details
+                const ticketCode = 'TICK-' + Math.floor(100000 + Math.random() * 900000);
+                const reportContent = activeCustomerSession?.data?.report_text || trimmedMsgText || 'Customer submitted data balance screenshot.';
+                const orderId = activeCustomerSession?.data?.order_id || null;
+                const orderDisplay = activeCustomerSession?.data?.order_display || (orderId ? `#${orderId}` : null);
+                const recipientPhone = activeCustomerSession?.data?.recipient_phone || null;
+
+                // Send approved response to customer
+                const approvedCustomerReply = `✅ *Report Approved & Submitted!*`
+                    + `\n━━━━━━━━━━━━━━━━━━━━━`
+                    + `\nThank you, *${pushName}*! Your data balance screenshot has been received and *approved*.`
+                    + `\n\nYour report and screenshot proof have been forwarded directly to our support management desk (*0553381853*) for immediate resolution.`
+                    + `\n\n• Ticket Code: *${ticketCode}*`
+                    + (orderDisplay ? `\n• Order ID: *${orderDisplay}*` : '')
+                    + (recipientPhone ? `\n• Recipient Phone: \`${recipientPhone}\`` : '')
+                    + `\n• Status: *Approved & Under Resolution* ⏳`
+                    + `\n• Priority: *High*`
+                    + `\n• Hotline: *0553381853*`
+                    + `\n• Estimated Resolution Time: *Under 10 minutes*`
+                    + `\n━━━━━━━━━━━━━━━━━━━━━`
+                    + `\nOur management is reviewing your complaint and will resolve it shortly.`;
+
+                try {
+                    await sock.sendMessage(from, { text: approvedCustomerReply }, { quoted: msg });
+                    console.log(`[Report Approved] Reply sent to ${senderPhone}`);
+                } catch (replyErr) {
+                    console.error('[Error sending approved reply]:', replyErr.message);
+                }
+
+                // Send report and screenshot picture to 0553381853
+                const adminJid = '233553381853@s.whatsapp.net';
+                const adminAlert = `🚨 *CUSTOMER REPORT APPROVED (DATA BALANCE SCREENSHOT)*`
+                    + `\n━━━━━━━━━━━━━━━━━━━━━`
+                    + `\n🎫 *Ticket Code:* \`${ticketCode}\``
+                    + `\n👤 *Customer:* ${pushName} (\`${senderPhone}\`)`
+                    + (orderDisplay ? `\n📦 *Order ID:* \`${orderDisplay}\`` : '')
+                    + (recipientPhone ? `\n📱 *Recipient Phone:* \`${recipientPhone}\`` : '')
+                    + `\n🕒 *Date & Time:* ${new Date().toLocaleString()}`
+                    + `\n━━━━━━━━━━━━━━━━━━━━━`
+                    + `\n📝 *Report / Complaint Details:*\n${reportContent}`
+                    + `\n━━━━━━━━━━━━━━━━━━━━━`
+                    + `\n⚡ *Action Required:* Screenshot proof approved. Please review the customer's attached data balance screenshot and resolve.`;
+
+                try {
+                    if (imgBuffer) {
+                        await sock.sendMessage(adminJid, {
+                            image: imgBuffer,
+                            caption: adminAlert
+                        });
+                    } else {
+                        await sock.sendMessage(adminJid, {
+                            text: adminAlert + `\n\n⚠️ (Image buffer could not be downloaded, but customer submitted a screenshot)`
+                        });
+                    }
+                    console.log(`[Support Alert] Forwarded approved report & screenshot to ${adminJid}`);
+                } catch (adminErr) {
+                    console.error('[Support Alert Forwarding Error]:', adminErr.message);
+                }
+
+                // Log ticket to DB
+                try {
+                    await callWebsiteApi({
+                        op: 'log_ticket',
+                        ticket_code: ticketCode,
+                        phone: senderPhone,
+                        name: pushName,
+                        message: reportContent,
+                        issue_type: 'order_issue',
+                        order_id: orderId,
+                        bot_reply: approvedCustomerReply
+                    });
+                } catch (e) {}
+
+                // Clear customer session
+                customerSessions.delete(senderPhone);
+                continue; // Done handling screenshot
+            }
+
+            // 12b. Auto-React to text-based report / complaint
             if (isReportIncoming) {
                 try {
                     await sock.sendMessage(from, { react: { text: '📝', key: msg.key } });
@@ -2955,6 +3041,8 @@ async function startBot() {
             const isReportReply = Boolean(bridgeRes?.is_report) || (reply && (
                 reply.includes('Support Ticket Created') || 
                 reply.includes('Customer Support Desk') ||
+                reply.includes('Customer Support & Report Desk') ||
+                reply.includes('Screenshot of Data Balance') ||
                 bridgeRes?.matched === 'REPORT_SESSION' || 
                 bridgeRes?.matched === 'REPORT_ISSUE'
             ));
