@@ -65,8 +65,8 @@
             "command_trigger": "5,5.,talk to an agent,talk to agent,agent,support,help,contact,human,report,complaint,issue,problem",
             "match_type": "contains",
             "action_type": "support_agent",
-            "response_text": "*Talk to an Agent — Apex Prime Tech*\n━━━━━━━━━━━━━━━━━━━━━\nOur customer support team is here to assist you!\n\nWhatsApp \/ Phone: *0553381853*\nWebsite: https:\/\/apexprime.club\nSupport Hours: 24\/7 Priority Support\n\nPlease type your message or issue below, and an agent will assist you shortly.",
-            "description": "5. Talk to an Agent",
+            "response_text": "*Apex Prime Tech — Customer Support Desk*\n━━━━━━━━━━━━━━━━━━━━━\nHello {name}, our support agents are ready to assist you!\n\nWhatsApp / Hotline: *0553381853*\n\n⚠️ *MANDATORY ACTION REQUIRED:*\nIf you are reporting an issue or undelivered data bundle, please send your issue details and attach a *screenshot of your current data balance* (dial *138# or *124# or check your network app).\n\n🚨 *IMPORTANT:* You *MUST* provide a screenshot of your data balance, *else there will be NO resolution* for this complaint.\n\n_(Please send your message or screenshot image directly below)_",
+            "description": "5. Talk to an Agent / Report Desk",
             "is_active": true
         },
         {
